@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1']
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      # EmissionKernels resolves from the VespaRegistry (this package is not in General).
+      - name: Add registries
+        run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
+      # Dedicated test env with a path [sources] back to this package (repo convention).
+      - name: Instantiate test env
+        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+      - name: Run tests (table-free suites; grackle-oracle suites are macOS-gated)
+        run: julia --project=test test/runtests.jl
