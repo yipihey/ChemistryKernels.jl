@@ -22,9 +22,12 @@ Design contract (mirrors `PPMKernels`/`PoissonKernels`):
     cooling coefficients are checked against the published Abel/Anninos et al.
     (1997) analytic fits (and, for recombination, against HyRec-2).
 
-  * **No tables.** Every rate/cooling coefficient is evaluated DIRECTLY from its
-    analytic fit (Abel/Anninos et al. 1997 and the references therein), not
-    interpolated from a precomputed log-T grid.
+  * **Analytic by default; tables opt-in.** Every rate/cooling coefficient is evaluated
+    DIRECTLY from its analytic fit (Abel/Anninos et al. 1997 and the references therein).
+    This analytic path is the default and the bit-exact reference. For the GPU hot path an
+    OPTIONAL log–log rate table (`build_rate_tables`/`table_rates`, see `rate_tables.jl`)
+    replaces the ~25 per-sub-step temperature fits with a branchless monotonic
+    interpolation; pass it via `solve_chem_device!(...; rate_tables=…)`.
 
   * **f32-safe representation.** State is carried as physical abundances relative
     to the hydrogen number density (`x_i = n_i/n_H`, dimensionless and O(1) for
@@ -43,6 +46,7 @@ module ChemistryKernels
 
 using KernelAbstractions
 const KA = KernelAbstractions
+import Adapt
 
 # Radiative-channel physics (cooling coefficients, metal lines, CMB Compton) now lives
 # in the foundation package EmissionKernels; ChemistryKernels depends on it and its
@@ -53,7 +57,7 @@ using EmissionKernels: ceHI, ceHeI, ceHeII, ciHI, ciHeI, ciHeII, ciHeIS,
       reHII, reHeII1, reHeII2, reHeIII, brem,
       GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow,
       comp1_cmb, comp2_cmb,
-      MetalAbundances, metal_abund, metal_cooling_rate, cooling_rate_total
+      MetalAbundances, metal_abund, metal_cooling_rate, cooling_rate_total, cooling_rate_total_tab
 
 export backend, has_backend, device_zeros, to_device, to_host
 # re-export the cooling/metal surface so `using ChemistryKernels` still sees it
@@ -123,6 +127,7 @@ include("edot.jl")
 include("network_step.jl")
 # Wave 4 — driver: Peebles recombination, the sub-cycle, and the host boundary.
 include("recombination.jl")
+include("rate_tables.jl")     # optional log–log rate lookup (uses recombination + rates_*)
 include("subcycle.jl")
 include("solve.jl")
 # Wave 5 — Lyα-mixing recombination for early-Universe / PMF science.

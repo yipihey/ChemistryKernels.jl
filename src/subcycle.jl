@@ -35,26 +35,42 @@ temperature `T` and CMB temperature `Trad`. k2 is the Peebles override (needs th
 neutral-H density `nHI` and Hubble rate `Hz`); k27/k28 are the CMB photo-rates;
 all others are the Wave-1 analytic fits. Pure.
 """
-@inline function build_rates(T, Trad, nHI, Hz; deuterium::Bool = false)
+# The reaction-rate coefficients that depend ONLY on the CMB radiation temperature
+# Trad (β₁s, k27, k28, the two He Saha factors).  Trad is frozen across a sub-cycle
+# unless the host supplies its expansion rate (evolve_z), so `evolve_cell` builds this
+# ONCE per cell and reuses it every iteration — hoisting ~5 transcendentals/iter out
+# of the per-iteration `build_rates`.  isbits NamedTuple ⇒ free in a GPU kernel.
+@inline function cmb_rates(Trad)
+    return (; b1s = beta1s_freq(Trad), k27 = k27_cmb(Trad), k28 = k28_cmb(Trad),
+            she = helium_saha_pair(Trad))
+end
+
+# Convenience: build the full rate set from (T, Trad, …) by computing the Trad terms
+# inline (callers that don't sub-cycle).  The hot path passes a precomputed `cmb_rates`
+# to `_build_rates_cr` directly (this 4-arg form and that one differ only in arg meaning,
+# so the cr core gets its own name to avoid a same-arity method clash).
+@inline build_rates(T, Trad, nHI, Hz; deuterium::Bool = false) =
+    _build_rates_cr(T, nHI, Hz, cmb_rates(Trad); deuterium = deuterium)
+
+@inline function _build_rates_cr(T, nHI, Hz, cr; deuterium::Bool = false)
     R = typeof(T)
     k2_val = peebles_k2(T, nHI, Hz)
     # C-weighted β₁s: matches k2=α_B×C so equilibrium gives true Saha (C cancels).
     # At high z (xe≈1, nHI≈0): C→1, k_beta1s→β₁s (drives Saha).
     # At z≈1200 (C≈0.006): k_beta1s negligible vs recombination → freeze-out preserved.
-    # β₁s is CMB photoionisation of H(1s) → evaluate at the RADIATION temperature Trad,
-    # not the matter T.  At recombination T≈Trad so this is unchanged; under a low-z UV
-    # background the gas heats to T≫Trad, and beta1s_freq(T) would otherwise spuriously
-    # drive H to Saha equilibrium at the hot matter temperature (no CMB photons exist to
-    # do that — Trad is cold).  The Peebles C-factor (k2/α_B) stays at the matter T.
-    k_b1s = beta1s_freq(Trad) * k2_val / (recfast_alpha(T) * R(1.0e6))
-    # Helium Saha factors at the CMB temperature (cosmological photoionisation
-    # equilibrium; → fully neutral He at low z, costing nothing for late-time gas).
-    she1, she2 = helium_saha_pair(Trad)
+    # β₁s (=`cr.b1s`) is CMB photoionisation of H(1s) evaluated at the RADIATION
+    # temperature Trad, not the matter T.  At recombination T≈Trad so this is unchanged;
+    # under a low-z UV background the gas heats to T≫Trad, and beta1s_freq(T) would
+    # otherwise spuriously drive H to Saha equilibrium at the hot matter temperature (no
+    # CMB photons exist to do that — Trad is cold).  The Peebles C-factor (k2/α_B) stays
+    # at the matter T.
+    k_b1s = cr.b1s * k2_val / (recfast_alpha(T) * R(1.0e6))
+    she1, she2 = cr.she     # He Saha factors at Trad (→ fully neutral He at low z)
     base = (; k1=k1(T), k2=k2_val, k3=k3(T), k4=k4(T), k5=k5(T),
             k6=k6(T), k7=k7(T), k8=k8(T), k9=k9(T), k10=k10(T), k11=k11(T),
             k12=k12(T), k13=k13(T), k14=k14(T), k15=k15(T), k16=k16(T), k17=k17(T),
             k18=k18(T), k19=k19(T), k22=k22(T), k57=k57(T), k58=k58(T),
-            k27=k27_cmb(Trad), k28=k28_cmb(Trad), k_beta1s=k_b1s,
+            k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s,
             she1=she1, she2=she2)
     deuterium || return base
     return merge(base, (; k50=k50(T), k51=k51(T), k52=k52(T), k53=k53(T),
@@ -93,7 +109,9 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
                              hubble = 71.0, Om = 0.27, OL = 0.73,
                              fh = FH_DEFAULT, deuterium::Bool = false,
                              hubble_expansion::Bool = false,
-                             adot_over_a = NaN, metals = nothing)
+                             adot_over_a = NaN, metals = nothing,
+                             rate_tables = nothing, cool_tables = nothing,
+                             itcap::Int = _SUB_ITMAX)
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     d    = rho / mh                       # network density (∝ n)
@@ -123,30 +141,45 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
     yDI   = deuterium ? R(DTOH_SEED)*yHI  : zero(R)
     yDII  = deuterium ? R(DTOH_SEED)*yHII : zero(R)
 
+    # CMB/Trad quantities are frozen across the sub-cycle unless the host hands us its
+    # expansion rate (evolve_z).  Precompute them ONCE — the CMB temperature Tc, the
+    # Compton coefficient c1, the Hubble rate, and the Trad-only rate coefficients
+    # (β₁s, k27, k28, He Saha) — so the per-iteration `build_rates` skips ~5
+    # transcendentals.  When evolve_z, they're recomputed from zt inside the loop.
+    Tc0  = comp2_cmb(z0)
+    c10  = comp1_cmb(z0)
+    cr0  = cmb_rates(Tc0)
+
     ttot = zero(R)
     iter = 0
-    while ttot < dt && iter < _SUB_ITMAX
-        iter += 1
+    while ttot < dt && iter < itcap        # itcap bounds THIS call (resumable: caller re-enters
+        iter += 1                          # with the partial state + remaining dt for the stragglers)
         rem = dt - ttot
 
         # redshift at the current point in the sub-cycle (frozen at z0 unless the host
         # handed us its expansion rate, in which case z evolves across the macro-step).
-        zt   = evolve_z ? (one(R) + z0) * exp(-Hz_ad * ttot) - one(R) : z0
-        Tc   = comp2_cmb(zt)              # CMB temperature at zt
-        c1   = comp1_cmb(zt)             # Compton coefficient at zt
-        Hz   = evolve_z ? hubble_z_of(zt; hubble = hubble, Om = Om, OL = OL) : Hz0
+        if evolve_z
+            zt = (one(R) + z0) * exp(-Hz_ad * ttot) - one(R)
+            Tc = comp2_cmb(zt); c1 = comp1_cmb(zt)
+            Hz = hubble_z_of(zt; hubble = hubble, Om = Om, OL = OL)
+            cr = cmb_rates(Tc)
+        else
+            zt = z0; Tc = Tc0; c1 = c10; Hz = Hz0; cr = cr0
+        end
 
         # temperature from the current state (number densities; nH2=yH2I/2 etc.)
         T = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde,
                             yHM, yH2I/R(2), yH2II/R(2); gamma = GAMMA_DEFAULT)
         Trad = Tc
-        K  = build_rates(T, Trad, yHI, Hz; deuterium = deuterium)
+        # rate coefficients: analytic fits (default/reference) or the opt-in log–log table.
+        K  = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
+                                       table_rates(rate_tables, T, yHI, Hz, cr; deuterium = deuterium)
 
         # cooling rate (volumetric, signed) + temstart shutoff (no cooling at
         # the temperature floor — set to exactly 0, not a spurious-sign tiny).
         nHD  = yHDI / R(3)
         edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), nHD, T, zt;
-                            nH = R(fh)*d, metals = metals)
+                            nH = R(fh)*d, metals = metals, cool_tables = cool_tables)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
             edot = zero(R)
         end
@@ -187,5 +220,5 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
         ttot += dtit
     end
 
-    return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m)
+    return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m), ttot   # ttot = consumed (≤ dt)
 end

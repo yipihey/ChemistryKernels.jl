@@ -45,4 +45,5 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_recombination_mixing.jl")
     include("test_recombination_field.jl")
     include("test_cooling_metal.jl")
+    include("test_rate_tables.jl")
 end

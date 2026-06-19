@@ -9,7 +9,7 @@ export solve_chem!
 # Per-cell: convert code units → CGS, evolve, convert back. Keeps fields in place.
 @kernel function _evolve_k!(e, HII, H2I, HDI, @Const(rho),
                             du, vu2, tu, dt, z, hubble, Om, OL, fh, deut, hexp, aoa,
-                            @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals)
+                            @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals, rtab, ctab)
     i = @index(Global)
     @inbounds begin
         T   = eltype(e)
@@ -19,10 +19,11 @@ export solve_chem!
         # term short-circuits to exactly 0 (bit-identical, zero-cost).
         mab = hasmetals ? MetalAbundances{T}(aC[i], aO[i], aSi[i], aFe[i]) :
                           MetalAbundances{T}()
-        en, hii, h2, hd = evolve_cell(rho[i]*du, e[i]*vu2, HII[i]*du, H2I[i]*du,
+        en, hii, h2, hd, _ = evolve_cell(rho[i]*du, e[i]*vu2, HII[i]*du, H2I[i]*du,
                                       hd_in, dt*tu, z; hubble=hubble, Om=Om, OL=OL,
                                       fh=fh, deuterium=deut,
-                                      hubble_expansion=hexp, adot_over_a=aoa, metals=mab)
+                                      hubble_expansion=hexp, adot_over_a=aoa, metals=mab,
+                                      rate_tables=rtab, cool_tables=ctab)
         e[i]   = en  / vu2
         HII[i] = hii / du
         H2I[i] = h2  / du
@@ -50,7 +51,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
                      hubble::Real = 71.0, Om::Real = 0.27, OL::Real = 0.73,
                      fh::Real = 0.76, deuterium::Bool = false,
                      hubble_expansion::Bool = false, adot_over_a::Real = NaN,
-                     metals = nothing,
+                     metals = nothing, rate_tables = nothing, cool_tables = nothing,
                      backend::Symbol = :cpu, precision::Type = Float64)
     n  = length(rho)
     @assert length(e_int) == n && length(HII) == n && length(H2I) == n
@@ -84,7 +85,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
     _evolve_k!(be)(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
                    P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
                    hubble_expansion, P(adot_over_a),
-                   d_aC, d_aO, d_aSi, d_aFe, hasmetals; ndrange = n)
+                   d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables; ndrange = n)
 
     e_int .= to_host(d_e)
     HII   .= to_host(d_HII)
@@ -109,6 +110,7 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
                             hubble::Real = 71.0, Om::Real = 0.27, OL::Real = 0.73,
                             fh::Real = 0.76, deuterium::Bool = false,
                             hubble_expansion::Bool = false, adot_over_a::Real = NaN,
+                            rate_tables = nothing, cool_tables = nothing,
                             backend::Symbol = :cuda, precision::Type = Float64)
     n  = length(rho)
     P  = precision
@@ -121,7 +123,7 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
     _evolve_k!(be)(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
                    P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
                    hubble_expansion, P(adot_over_a),
-                   dz, dz, dz, dz, false; ndrange = n)
+                   dz, dz, dz, dz, false, rate_tables, cool_tables; ndrange = n)
     KA.synchronize(be)
     return nothing
 end

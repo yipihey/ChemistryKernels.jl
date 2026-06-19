@@ -20,7 +20,12 @@ network at gas temperature `T` [K] and redshift `z`. Number densities are physic
 `EmissionKernels.cooling_rate_total`. Pure.
 """
 @inline function cooling_edot(nHI, nHII, nHeI, nde, nH2, nHD, T, z;
-                              ih2optical::Bool = false, nH = nothing, metals = nothing)
-    return -cooling_rate_total(nHI, nHII, nHeI, nde, nH2, nHD, T, z;
-                               ih2optical = ih2optical, nH = nH, metals = metals)
+                              ih2optical::Bool = false, nH = nothing, metals = nothing,
+                              cool_tables = nothing)
+    # analytic fits (default/reference) or the opt-in log–log cooling table.
+    return cool_tables === nothing ?
+        -cooling_rate_total(nHI, nHII, nHeI, nde, nH2, nHD, T, z;
+                            ih2optical = ih2optical, nH = nH, metals = metals) :
+        -cooling_rate_total_tab(cool_tables, nHI, nHII, nHeI, nde, nH2, nHD, T, z;
+                                ih2optical = ih2optical, nH = nH, metals = metals)
 end
