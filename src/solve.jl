@@ -104,6 +104,8 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
     if hasdust
         @assert Z_rel !== nothing && G0 !== nothing && A_V !== nothing
         @assert length(Z_rel)==n && length(G0)==n && length(A_V)==n
+        @assert N_H  === nothing || length(N_H)  == n
+        @assert N_H2 === nothing || length(N_H2) == n
     end
     d_Zrel = hasdust ? to_device(be, collect(Z_rel), P) : device_zeros(be, P, (n,))
     d_G0   = hasdust ? to_device(be, collect(G0),    P) : device_zeros(be, P, (n,))

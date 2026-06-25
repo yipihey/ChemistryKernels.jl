@@ -161,6 +161,22 @@ Dust physics is enabled by `dust = true`, which requires:
     c10  = comp1_cmb(z0)
     cr0  = cmb_rates(Tc0)
 
+    # Dust: hoist the loop-invariant pieces out of the sub-cycle (same idea as the
+    # cmb_rates hoist above).  k_lw (LW photodissociation × self-shielding × dust
+    # attenuation) depends ONLY on the per-cell constants (G0, N_H, N_H2, Z_rel) →
+    # fully invariant.  T_dust = T_dust_eq(G0, A_V, Tc) is invariant too whenever the
+    # CMB is frozen (the common local-equilibrium case); it is refreshed inside the
+    # loop only when evolve_z moves Tc.  This keeps ~1 exp + 2 pow (T_dust) and the
+    # shielding sqrt/exp out of every sub-step, so the dust path does not reintroduce
+    # the transcendentals the rate tables were built to remove.
+    if dust
+        n_H_phys = R(fh) * d
+        k_lw0    = k_H2_LW_eff(R(G0), R(N_H2), R(N_H), R(Z_rel))   # invariant
+        T_d0     = T_dust_eq(R(G0), R(A_V), Tc0)                   # invariant unless evolve_z
+    else
+        n_H_phys = zero(R); k_lw0 = zero(R); T_d0 = zero(R)
+    end
+
     ttot = zero(R)
     iter = 0
     while ttot < dt && iter < itcap        # itcap bounds THIS call (resumable: caller re-enters
@@ -186,17 +202,16 @@ Dust physics is enabled by `dust = true`, which requires:
         K  = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
                                        table_rates(rate_tables, T, yHI, Hz, cr; deuterium = deuterium)
 
-        # Dust physics: local equilibrium T_dust + per-sub-step rate coefficients.
-        # All quantities are zero / nothing when dust = false (zero overhead).
+        # Dust physics: per-sub-step rate coefficients (the T- and nₑ-dependent ones).
+        # T_dust and k_lw are hoisted above; T_d is only refreshed here when evolve_z
+        # moves the CMB temperature.  All zero / nothing when dust = false (no overhead).
         if dust
-            n_H_phys     = R(fh) * d
-            T_d          = T_dust_eq(R(G0), R(A_V), Tc)
+            T_d          = evolve_z ? T_dust_eq(R(G0), R(A_V), Tc) : T_d0
             k_h2d        = k_H2_dust(T, T_d, R(Z_rel))
             k_grr        = k_gr_recomb_HII(T, R(G0), R(Z_rel), yde)
-            k_lw         = k_H2_LW_eff(R(G0), R(N_H2), R(N_H), R(Z_rel))
             Gamma_pe_vol = Gamma_PE(T, R(G0), R(Z_rel), yde) * n_H_phys
             Lambda_gg_vol = Lambda_gr(T, T_d, n_H_phys, R(Z_rel))
-            dust_rates   = (; k_h2d, k_grr, k_lw)
+            dust_rates   = (; k_h2d, k_grr, k_lw = k_lw0)
         else
             Gamma_pe_vol  = zero(R)
             Lambda_gg_vol = zero(R)

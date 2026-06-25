@@ -11,7 +11,7 @@ export cooling_edot
 
 """
     cooling_edot(nHI, nHII, nHeI, nde, nH2, nHD, T, z; ih2optical=false, nH=nothing,
-                 metals=nothing, Gamma_PE_vol=0, Lambda_gr_vol=0)
+                 metals=nothing, cool_tables=nothing, Gamma_PE_vol=0, Lambda_gr_vol=0)
 
 Net volumetric energy rate ė [erg cm⁻³ s⁻¹] (cooling ⇒ negative) for the reduced
 network at gas temperature `T` [K] and redshift `z`. Number densities are physical
