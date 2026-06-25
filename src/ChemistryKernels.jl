@@ -7,8 +7,14 @@ New Astronomy 2, 181)** and **Anninos, Zhang, Abel & Norman (1997, New Astronomy
 2, 209)** — the original Enzo primordial chemistry (the same physics later
 packaged as the `grackle` library).  Reduced model: advect HII, H2I, HDI;
 H⁻/H₂⁺/D⁺ in algebraic equilibrium; helium in ionisation equilibrium (or advected
-He⁺); nₑ from charge conservation; primordial only, no metals, no UV background
-(unless photo-ionisation rates are supplied).
+He⁺); nₑ from charge conservation; primordial only by default.
+
+Dust physics (enabled by `dust=true` in `solve_chem!` / `evolve_cell`): H₂
+formation on grain surfaces (Cazaux & Tielens 2004), photoelectric heating
+(Bakes & Tielens 1994), gas-grain collisional coupling (Hollenbach & McKee 1989),
+grain-assisted HII recombination (Weingartner & Draine 2001), and Lyman-Werner H₂
+photodissociation with self-shielding (Draine & Bertoldi 1996) and dust attenuation.
+Local equilibrium `T_dust` (Hollenbach & McKee 1979); no RHD required.
 
 Also implements density-dependent Lyα-mixing recombination (`solve_chem_mixing!`)
 for early-Universe / PMF science, where the Peebles C-factor escape rate uses a
@@ -117,6 +123,11 @@ include("rates_atomic.jl")
 include("rates_h2.jl")
 include("rates_deuterium.jl")
 include("rates_cmb.jl")
+# Wave 1 dust extension — grain surface rates, PE heating, gas-grain coupling,
+# local equilibrium T_dust, and LW shielding.
+include("rates_dust.jl")
+include("dust_temperature.jl")
+include("shielding.jl")
 # Wave 1 cooling coefficients (ceHI…brem, GA*, HD*, comp*_cmb) + the metal lines now
 # live in EmissionKernels (imported above).
 # Wave 2 — local composed: temperature (mmw/H2-γ) + algebraic equilibrium species.

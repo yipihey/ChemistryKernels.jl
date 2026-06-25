@@ -2,8 +2,9 @@
 # reduced primordial+D network: one backward-Euler sweep of the network, with
 #   H⁻, H₂⁺, D⁺ as algebraic-equilibrium intermediaries; helium in collisional-
 #   radiative ionisation equilibrium (or, optionally, advected He⁺ — see the He
-#   block below); nₑ from charge conservation; no dust / self-shielding (only the
-#   CMB photo-rates k27,k28 and any supplied external photoionisation survive).
+#   block below); nₑ from charge conservation; optional dust physics (H₂ on
+#   grains, LW photodissociation with shielding, grain-assisted HII recombination)
+#   enabled by passing a `dust_rates` NamedTuple.
 #
 # Each provisional Xⁿ⁺¹ = (s·dt + Xⁿ)/(1 + a·dt) with s = formation, a =
 # destruction frequency.  Species use the network's mass-equivalent convention
@@ -25,17 +26,23 @@ const _NET_TINY = 1.0e-20
 
 """
     network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II, yDI, yDII, yHDI, K, dt;
-                 deuterium = false)
+                 deuterium = false, dust_rates = nothing)
 
 One backward-Euler sweep. `d` = total density (same units as the species), `fh` =
 hydrogen mass fraction, `K` = NamedTuple of rate coefficients `k1..k58` plus the
 CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
 `dt` = the subcycle step. Returns a NamedTuple of the updated species. Pure.
+
+`dust_rates`, when not `nothing`, is a NamedTuple `(; k_h2d, k_grr, k_lw)`:
+  - `k_h2d` [cm³/s] — H₂ formation on dust (Cazaux & Tielens 2004)
+  - `k_grr` [cm³/s] — grain-assisted HII recombination (Weingartner & Draine 2001)
+  - `k_lw`  [s⁻¹]  — effective LW H₂ photodissociation (Draine & Bertoldi 1996)
 """
 @inline function network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
                               yDI, yDII, yHDI, K, dt; deuterium::Bool = false,
                               yHeII_in = nothing, yHeIII_in = nothing,
-                              GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0)
+                              GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0,
+                              dust_rates = nothing)
     R    = typeof(yHI)
     tiny = R(_NET_TINY)
     two  = R(2); half = R(0.5); four = R(4)
@@ -108,10 +115,12 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
          two*k22*yHI^2 + k57*yHI + k58*yHeI/four + k_beta1s + R(GamHI)
     HIp = (sc*dt + yHI) / (one(R) + ac*dt)
 
-    # 2) HII  (+ β₁s source; + k28 H₂⁺ photodissociation return; + Γ_HI photoionisation)
+    # 2) HII  (+ β₁s source; + k28 H₂⁺ photodissociation return; + Γ_HI photoionisation;
+    #     + grain-assisted recombination when dust_rates supplied)
     sc = k1*yHI*yde + k10*H2IIeq*yHI/two + k57*yHI*yHI + k58*yHI*yHeI/four +
          k_beta1s*yHI + k28*nH2II + R(GamHI)*yHI
-    ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM
+    ac_grr = dust_rates !== nothing ? dust_rates.k_grr * yde : zero(R)
+    ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM + ac_grr
     HIIp = (sc*dt + yHII) / (one(R) + ac*dt)
 
     # 3) e⁻ provisional — used ONLY for downstream consistency
@@ -121,9 +130,13 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
            k5*yHeII/four - k4*yHeII/four + k14*yHM - k7*yHI - k18*H2IIeq/two)
     dep = (sc*dt + yde) / (one(R) + ac*dt)
 
-    # 7) H2  (formation via the H₂⁺ and H⁻ channels uses the equilibrium H₂⁺)
-    sc = two*(k8*yHM*yHI + k10*H2IIeq*yHI/two + k19*H2IIeq*yHM/two + k22*yHI*yHI^2)
-    ac = k13*yHI + k11*yHII + k12*yde
+    # 7) H2  (formation via H₂⁺, H⁻ channels and dust surface reactions;
+    #     destruction via LW photodissociation when dust_rates supplied)
+    sc_dust = dust_rates !== nothing ? two * dust_rates.k_h2d * yHI^2 : zero(R)
+    sc = two*(k8*yHM*yHI + k10*H2IIeq*yHI/two + k19*H2IIeq*yHM/two + k22*yHI*yHI^2) +
+         sc_dust
+    ac_lw = dust_rates !== nothing ? dust_rates.k_lw : zero(R)
+    ac = k13*yHI + k11*yHII + k12*yde + ac_lw
     H2Ip = (sc*dt + yH2I) / (one(R) + ac*dt)
 
     # 8,9) store the consistent old-state equilibrium H₂⁺ (H⁻ already in HMp above)

@@ -99,11 +99,19 @@ end
 end
 
 """
-    evolve_cell(rho, e, HII_m, H2I_m, HDI_m, dt, z; hubble, Om, OL, fh, deuterium)
+    evolve_cell(rho, e, HII_m, H2I_m, HDI_m, dt, z; hubble, Om, OL, fh, deuterium,
+                dust, Z_rel, G0, A_V, N_H, N_H2)
 
 Sub-cycle one cell over macro-step `dt` [s].  `rho` = gas mass density [g/cm³],
 `e` = specific internal energy [erg/g]; `HII_m`/`H2I_m`/`HDI_m` = species MASS
 densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pure.
+
+Dust physics is enabled by `dust = true`, which requires:
+- `Z_rel`  : metallicity relative to solar (sets dust-to-gas ratio)
+- `G0`     : FUV field [Habing units] (for PE heating, grain charging, T_dust)
+- `A_V`    : visual extinction [mag] (attenuates UV heating of dust and LW field)
+- `N_H`    : H column density [cm⁻²] (dust LW attenuation; 0 → skip)
+- `N_H2`   : H₂ column density [cm⁻²] (H₂ self-shielding; 0 → skip)
 """
 @inline function evolve_cell(rho, e, HII_m, H2I_m, HDI_m, dt, z;
                              hubble = 71.0, Om = 0.27, OL = 0.73,
@@ -111,7 +119,10 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
                              hubble_expansion::Bool = false,
                              adot_over_a = NaN, metals = nothing,
                              rate_tables = nothing, cool_tables = nothing,
-                             itcap::Int = _SUB_ITMAX)
+                             itcap::Int = _SUB_ITMAX,
+                             dust::Bool = false,
+                             Z_rel::Real = 0.0, G0::Real = 0.0,
+                             A_V::Real = 0.0, N_H::Real = 0.0, N_H2::Real = 0.0)
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     d    = rho / mh                       # network density (∝ n)
@@ -175,11 +186,29 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
         K  = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
                                        table_rates(rate_tables, T, yHI, Hz, cr; deuterium = deuterium)
 
+        # Dust physics: local equilibrium T_dust + per-sub-step rate coefficients.
+        # All quantities are zero / nothing when dust = false (zero overhead).
+        if dust
+            n_H_phys     = R(fh) * d
+            T_d          = T_dust_eq(R(G0), R(A_V), Tc)
+            k_h2d        = k_H2_dust(T, T_d, R(Z_rel))
+            k_grr        = k_gr_recomb_HII(T, R(G0), R(Z_rel), yde)
+            k_lw         = k_H2_LW_eff(R(G0), R(N_H2), R(N_H), R(Z_rel))
+            Gamma_pe_vol = Gamma_PE(T, R(G0), R(Z_rel), yde) * n_H_phys
+            Lambda_gg_vol = Lambda_gr(T, T_d, n_H_phys, R(Z_rel))
+            dust_rates   = (; k_h2d, k_grr, k_lw)
+        else
+            Gamma_pe_vol  = zero(R)
+            Lambda_gg_vol = zero(R)
+            dust_rates    = nothing
+        end
+
         # cooling rate (volumetric, signed) + temstart shutoff (no cooling at
         # the temperature floor — set to exactly 0, not a spurious-sign tiny).
         nHD  = yHDI / R(3)
         edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), nHD, T, zt;
-                            nH = R(fh)*d, metals = metals, cool_tables = cool_tables)
+                            nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
+                            Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
             edot = zero(R)
         end
@@ -213,7 +242,8 @@ densities [g/cm³] (ρ·x).  Returns the updated `(e, HII_m, H2I_m, HDI_m)`. Pur
 
         # species update (one backward-Euler sweep)
         s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
-                         yDI, yDII, yHDI, K, dtit; deuterium = deuterium)
+                         yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
+                         dust_rates = dust_rates)
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
 

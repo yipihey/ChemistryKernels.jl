@@ -46,4 +46,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_recombination_field.jl")
     include("test_cooling_metal.jl")
     include("test_rate_tables.jl")
+    # ── dust physics (rates, T_dust, shielding, network_step, evolve_cell) ─────
+    include("test_dust.jl")
 end
