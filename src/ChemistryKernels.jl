@@ -10,11 +10,15 @@ H⁻/H₂⁺/D⁺ in algebraic equilibrium; helium in ionisation equilibrium (or
 He⁺); nₑ from charge conservation; primordial only by default.
 
 Dust physics (enabled by `dust=true` in `solve_chem!` / `evolve_cell`): H₂
-formation on grain surfaces (Cazaux & Tielens 2004), photoelectric heating
-(Bakes & Tielens 1994), gas-grain collisional coupling (Hollenbach & McKee 1989),
-grain-assisted HII recombination (Weingartner & Draine 2001), and Lyman-Werner H₂
-photodissociation with self-shielding (Draine & Bertoldi 1996) and dust attenuation.
-Local equilibrium `T_dust` (Hollenbach & McKee 1979); no RHD required.
+formation on grain surfaces (Cazaux & Tielens 2004), grain-assisted HII
+recombination (Weingartner & Draine 2001), and Lyman-Werner H₂ photodissociation
+with self-shielding (Draine & Bertoldi 1996) and dust attenuation live in
+`rates_dust.jl` / `shielding.jl` here.  The thermal channels — photoelectric
+heating (Bakes & Tielens 1994) and gas-grain collisional coupling (Hollenbach &
+McKee 1989) — live in `EmissionKernels.cooling_dust` (imported as `Gamma_PE` and
+`Lambda_gr`) alongside the metal-line cooling, keeping the architecture consistent.
+Local equilibrium `T_dust` (Hollenbach & McKee 1979, `dust_temperature.jl`);
+no RHD required.
 
 Also implements density-dependent Lyα-mixing recombination (`solve_chem_mixing!`)
 for early-Universe / PMF science, where the Peebles C-factor escape rate uses a
@@ -63,14 +67,16 @@ using EmissionKernels: ceHI, ceHeI, ceHeII, ciHI, ciHeI, ciHeII, ciHeIS,
       reHII, reHeII1, reHeII2, reHeIII, brem,
       GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow,
       comp1_cmb, comp2_cmb,
-      MetalAbundances, metal_abund, metal_cooling_rate, cooling_rate_total, cooling_rate_total_tab
+      MetalAbundances, metal_abund, metal_cooling_rate, cooling_rate_total, cooling_rate_total_tab,
+      Gamma_PE, Lambda_gr, Lambda_dust
 
 export backend, has_backend, device_zeros, to_device, to_host
 # re-export the cooling/metal surface so `using ChemistryKernels` still sees it
 export ceHI, ceHeI, ceHeII, ciHI, ciHeI, ciHeII, ciHeIS,
        reHII, reHeII1, reHeII2, reHeIII, brem,
        GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow, comp1_cmb, comp2_cmb,
-       MetalAbundances, metal_abund, metal_cooling_rate
+       MetalAbundances, metal_abund, metal_cooling_rate,
+       Gamma_PE, Lambda_gr, Lambda_dust
 
 # ── backend registry ─────────────────────────────────────────────────────────
 const _BACKENDS = Dict{Symbol,Any}(:cpu => CPU())
@@ -123,8 +129,9 @@ include("rates_atomic.jl")
 include("rates_h2.jl")
 include("rates_deuterium.jl")
 include("rates_cmb.jl")
-# Wave 1 dust extension — grain surface rates, PE heating, gas-grain coupling,
-# local equilibrium T_dust, and LW shielding.
+# Wave 1 dust extension — grain surface rate coefficients (H₂-on-dust, grain-assisted
+# HII recombination), local equilibrium T_dust, and LW shielding.  The thermal channels
+# (Gamma_PE, Lambda_gr, Lambda_dust) live in EmissionKernels (imported above).
 include("rates_dust.jl")
 include("dust_temperature.jl")
 include("shielding.jl")
