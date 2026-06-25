@@ -35,13 +35,13 @@ end
     @test Gamma_PE(1000.0, 0.0, 1.0, 1.0) == 0.0
     # Zero metallicity → no PE heating
     @test Gamma_PE(1000.0, 1.0, 0.0, 1.0) == 0.0
-    # Reference value: G₀=1, T=1e4 K, Z=1, n_e=1 cm⁻³ (ψ = 100)
-    # ε ≈ 4.87e-2/(1+4e-3*100^0.73) + 3.65e-2*(1)^0.7/(1+2e-4*100) ≈ 0.0289
-    # Γ ≈ 1.3e-24 * 0.0289 * 1 ≈ 3.76e-26 erg/s per H
+    # Reference value: G₀=1, T=1e4 K, Z=1, n_e=1 cm⁻³ (ψ = G0√T/ne = 100)
+    # ε = 4.87e-2/(1+4e-3*100^0.73) + 3.65e-2/(1+2e-4*100) ≈ 0.0793
+    # Γ ≈ 1.3e-24 * 0.0793 ≈ 1.03e-25 erg/s per H nucleus
     Gpe = Gamma_PE(1e4, 1.0, 1.0, 1.0)
-    @test 1e-26 < Gpe < 1e-25
-    # Linear in G₀
-    @test Gamma_PE(1e4, 2.0, 1.0, 1.0) ≈ 2 * Gamma_PE(1e4, 1.0, 1.0, 1.0)
+    @test 5e-26 < Gpe < 2e-25
+    # Monotonically increasing with G₀ (not exactly linear because ε depends on ψ=G0√T/ne)
+    @test Gamma_PE(1e4, 2.0, 1.0, 1.0) > Gamma_PE(1e4, 1.0, 1.0, 1.0)
     # Float32
     @test Gamma_PE(1f4, 1f0, 1f0, 1f0) isa Float32
 end
@@ -183,21 +183,30 @@ end
     s0 = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
                       yDI, yDII, yHDI, K, dt)
 
-    # With dust: k_h2d adds H₂ formation; k_lw adds H₂ destruction; k_grr reduces HII
+    # With dust grain formation only (k_lw = 0 to isolate the H₂ source term):
+    # k_lw is set to zero here so that k_h2d can dominate at these conditions.
+    # (At G₀=1 and dt=1e10 s, k_lw·dt ~ 0.6 >> k_h2d·nH·dt ~ 2e-4, so testing
+    # grain formation requires suppressing LW; that combination is tested via evolve_cell.)
     T_d   = T_dust_eq(1.0, 2.0, Trad)
     k_h2d = k_H2_dust(T, T_d, 1.0)
     k_grr = k_gr_recomb_HII(T, 1.0, 1.0, yde)
-    k_lw  = k_H2_LW_eff(1.0, 0.0, 0.0, 1.0)   # no shielding (thin column)
-    dust_rates = (; k_h2d, k_grr, k_lw)
+    dust_rates = (; k_h2d, k_grr, k_lw = 0.0)
 
     s1 = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
                       yDI, yDII, yHDI, K, dt; dust_rates = dust_rates)
 
-    # H₂ with dust formation > H₂ without (grain route adds molecules)
+    # H₂ with grain formation (no LW) > H₂ without dust (grain route adds molecules)
     @test s1.yH2I > s0.yH2I
 
     # HII with grain recombination < HII without (extra recombination sink)
     @test s1.yHII < s0.yHII
+
+    # LW alone (k_h2d=0) must destroy H₂
+    k_lw_val = k_H2_LW_eff(1.0, 0.0, 0.0, 1.0)
+    dust_lw = (; k_h2d = 0.0, k_grr = 0.0, k_lw = k_lw_val)
+    s3 = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
+                      yDI, yDII, yHDI, K, dt; dust_rates = dust_lw)
+    @test s3.yH2I < s0.yH2I
 
     # dust_rates = nothing must give identical result to no keyword
     s2 = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
