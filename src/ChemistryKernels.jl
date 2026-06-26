@@ -135,6 +135,9 @@ include("rates_cmb.jl")
 include("rates_dust.jl")
 include("dust_temperature.jl")
 include("shielding.jl")
+# Wave 1 compact storage — UInt16 log₂-encoded species fractions (2 B/cell vs 4 B f32).
+# Codec: u=0 → X≈7.73e-34, u=65535 → X=1.0; ≈0.12%/ULP; 33 dex range.
+include("log2_species.jl")
 # Wave 1 cooling coefficients (ceHI…brem, GA*, HD*, comp*_cmb) + the metal lines now
 # live in EmissionKernels (imported above).
 # Wave 2 — local composed: temperature (mmw/H2-γ) + algebraic equilibrium species.

@@ -50,4 +50,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_dust.jl")
     # ── performance knobs (dtfrac, workgroup_size, cell sort) ─────────────────
     include("test_performance.jl")
+    # ── UInt16 log₂-encoded species storage ───────────────────────────────────
+    include("test_u16_species.jl")
 end
