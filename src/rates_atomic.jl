@@ -22,10 +22,12 @@
 @inline function k1(T::Real)
     R = typeof(T)
     Tev = T / R(11605.0)
-    x = log(Tev)
-    val = exp(evalpoly(x, (R(-32.71396786375), R(13.53655609057), R(-5.739328757388),
+    val = @fastmath begin
+        x = log(Tev)
+        exp(evalpoly(x, (R(-32.71396786375), R(13.53655609057), R(-5.739328757388),
               R(1.563154982022), R(-0.2877056004391), R(0.03482559773736999),
               R(-0.00263197617559), R(0.0001119543953861), R(-2.039149852002e-6))))
+    end
     return Tev <= R(0.8) ? max(R(1e-20), val) : val
 end
 @scalarkernel k1
@@ -37,10 +39,12 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     Tev <= R(0.8) && return R(1e-20)
-    x = log(Tev)
-    return exp(evalpoly(x, (R(-44.09864886561001), R(23.91596563469), R(-10.75323019821),
+    return @fastmath begin
+        x = log(Tev)
+        exp(evalpoly(x, (R(-44.09864886561001), R(23.91596563469), R(-10.75323019821),
                R(3.058038757198), R(-0.5685118909884001), R(0.06795391233790001),
                R(-0.005009056101857001), R(0.0002067236157507), R(-3.649161410833e-6))))
+    end
 end
 @scalarkernel k3
 
@@ -51,10 +55,12 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     Tev <= R(0.8) && return R(1e-20)
-    x = log(Tev)
-    return exp(evalpoly(x, (R(-68.71040990212001), R(43.93347632635), R(-18.48066993568),
+    return @fastmath begin
+        x = log(Tev)
+        exp(evalpoly(x, (R(-68.71040990212001), R(43.93347632635), R(-18.48066993568),
                R(4.701626486759002), R(-0.7692466334492), R(0.08113042097303),
                R(-0.005324020628287001), R(0.0001975705312221), R(-3.165581065665e-6))))
+    end
 end
 @scalarkernel k5
 
@@ -92,7 +98,7 @@ end
 @inline function k57(T::Real)
     R = typeof(T)
     T <= R(3.0e3) && return R(1e-20)
-    return R(1.2e-17) * T^R(1.2) * exp(-R(1.578e5) / T)
+    @fastmath return R(1.2e-17) * T^R(1.2) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k57
 
@@ -102,6 +108,6 @@ end
 @inline function k58(T::Real)
     R = typeof(T)
     T <= R(3.0e3) && return R(1e-20)
-    return R(1.75e-17) * T^R(1.3) * exp(-R(1.578e5) / T)
+    @fastmath return R(1.75e-17) * T^R(1.3) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k58

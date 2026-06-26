@@ -19,13 +19,13 @@ const _SUB_ITMAX = 5_000         # subcycle cap (bounds GPU kernel time; well-be
                                  # cells converge in ≪100 steps — this is a watchdog)
 const _SUB_TINY  = 1.0e-20
 
-# A 10%-change sub-step from a rate, with no constraint (Inf) when the rate is
-# ~0.  NOTE: unlike a code-unit scheme (whose edot/dedot are O(1), so an absolute
-# floor is harmless), our rates are PHYSICAL CGS (volumetric ė ~ 1e-30), so an
-# absolute floor would EXCEED real rates and corrupt them — we guard the
-# division instead, never the value.
-@inline _step10(X, rate) = abs(rate) > zero(rate) ? abs(oftype(rate, 0.1) * X / rate) :
-                           typemax(rate)
+# Fraction-change sub-step from a rate: step ≤ f·X/rate.  No constraint (Inf)
+# when the rate is ~0.  NOTE: unlike a code-unit scheme (whose edot/dedot are
+# O(1), so an absolute floor is harmless), our rates are PHYSICAL CGS (volumetric
+# ė ~ 1e-30), so an absolute floor would EXCEED real rates and corrupt them — we
+# guard the division instead, never the value.
+@inline _step_f(X, rate, f) = abs(rate) > zero(rate) ? abs(f * X / rate) : typemax(rate)
+@inline _step10(X, rate) = _step_f(X, rate, oftype(rate, 0.1))   # backward-compat alias
 
 """
     build_rates(T, Trad, nHI, Hz; deuterium=false)
@@ -120,6 +120,7 @@ Dust physics is enabled by `dust = true`, which requires:
                              adot_over_a = NaN, metals = nothing,
                              rate_tables = nothing, cool_tables = nothing,
                              itcap::Int = _SUB_ITMAX,
+                             dtfrac::Real = 0.1,
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
                              A_V::Real = 0.0, N_H::Real = 0.0, N_H2::Real = 0.0)
@@ -177,6 +178,7 @@ Dust physics is enabled by `dust = true`, which requires:
         n_H_phys = zero(R); k_lw0 = zero(R); T_d0 = zero(R)
     end
 
+    f    = R(dtfrac)                       # fraction-change tolerance (default 0.1 = 10%)
     ttot = zero(R)
     iter = 0
     while ttot < dt && iter < itcap        # itcap bounds THIS call (resumable: caller re-enters
@@ -233,18 +235,18 @@ Dust physics is enabled by `dust = true`, which requires:
             edot -= R(2) * Hz_ad * e * rho
         end
 
-        # chemistry 10% sub-step (no constraint when a rate is ~0)
+        # chemistry sub-step (no constraint when a rate is ~0)
         dedot, HIdot = _de_hi_dot(yHI, yHII, yde, yH2I, yHM, yH2II,
                                   yHeI, tiny, tiny, K)
-        dtit = min(_step10(yde, dedot), _step10(yHI, HIdot), rem, R(0.5)*dt)
+        dtit = min(_step_f(yde, dedot, f), _step_f(yHI, HIdot, f), rem, R(0.5)*dt)
 
-        # energy 10% sub-step + CMB-Compton stiffness split
+        # energy sub-step + CMB-Compton stiffness split
         edot_c    = -c1 * (T - Tc) * yde            # Compton part (volumetric)
         edot_rest = edot - edot_c
         Kc        = c1 * yde * (T / e) / rho        # specific Compton frequency
         stiff     = Kc * rem > one(R)
         de_spec   = (stiff ? edot_rest : edot) / rho
-        dtit = min(dtit, _step10(e, de_spec))
+        dtit = min(dtit, _step_f(e, de_spec, f))
 
         # energy update
         if stiff

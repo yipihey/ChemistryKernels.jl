@@ -151,5 +151,7 @@ include("solve.jl")
 # Wave 5 — Lyα-mixing recombination for early-Universe / PMF science.
 include("tables.jl")
 include("recombination_clumping.jl")
+# Host-side utilities (cell sorting for GPU warp coherence, etc.).
+include("utils.jl")
 
 end # module ChemistryKernels

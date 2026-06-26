@@ -11,7 +11,7 @@ export solve_chem!
                             du, vu2, tu, dt, z, hubble, Om, OL, fh, deut, hexp, aoa,
                             @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals, rtab, ctab,
                             @Const(aZrel), @Const(aG0), @Const(aAV),
-                            @Const(aNH), @Const(aNH2), hasdust)
+                            @Const(aNH), @Const(aNH2), hasdust, dtfrac)
     i = @index(Global)
     @inbounds begin
         T   = eltype(e)
@@ -33,6 +33,7 @@ export solve_chem!
                                       fh=fh, deuterium=deut,
                                       hubble_expansion=hexp, adot_over_a=aoa, metals=mab,
                                       rate_tables=rtab, cool_tables=ctab,
+                                      dtfrac=dtfrac,
                                       dust=hasdust, Z_rel=Z_rel, G0=G0_i,
                                       A_V=AV_i, N_H=NH_i, N_H2=NH2_i)
         e[i]   = en  / vu2
@@ -46,14 +47,35 @@ end
     solve_chem!(rho, e_int, HII, H2I, [HDI]; a_value, dt, density_units,
                 length_units, time_units, hubble=71, Om=0.27, OL=0.73, fh=0.76,
                 deuterium=false, dust=false, Z_rel=nothing, G0=nothing, A_V=nothing,
-                N_H=nothing, N_H2=nothing, backend=:cpu, precision=Float64)
+                N_H=nothing, N_H2=nothing, rate_tables=nothing, cool_tables=nothing,
+                dtfrac=0.1, workgroup_size=0, backend=:cpu, precision=Float64)
 
 Evolve the v2026 reduced primordial+D chemistry/cooling over `dt` (code time
 units) for every cell, updating `e_int`, `HII`, `H2I` (and `HDI` if `deuterium`)
 in place.  `rho` is read-only; `HII`/`H2I`/`HDI` are MASS densities ρ·x (the
 network's mass-equivalent convention) in the host code units defined by
 `density_units`/`length_units`/`time_units`.  The engine is a KA kernel
-(`backend=:cpu` or `:metal`) at `precision` (Float64/Float32).
+(`backend=:cpu` or `:cuda`/`:metal`) at `precision` (Float64/Float32).
+
+**Performance options:**
+- `rate_tables`   : pre-built `RateTables` from `build_rate_tables()`.  Replaces
+                    ~25 analytic exp/log/pow fits with branchless log–log lookup;
+                    ~3–5× speedup on the rate-building cost (dominant on GPU).
+- `cool_tables`   : pre-built `CoolingTables` from `EmissionKernels.build_cooling_tables()`.
+                    Same idea for the ~15 cooling channels; best combined with `rate_tables`.
+- `dtfrac`        : fraction-of-X sub-step size (default 0.1 = 10%-change rule).  Setting
+                    `dtfrac=0.2` roughly halves sub-step count at ≲1% accuracy cost —
+                    suitable for hydro-coupled runs where chemistry error ≪ hydro truncation.
+- `workgroup_size` : GPU threads per workgroup (0 = let KernelAbstractions choose the
+                    backend default, typically 256).  Try 128 or 512 on A6000/H100 when
+                    register pressure or occupancy is the bottleneck.
+
+**Recommended production-mode call on CUDA:**
+```julia
+rt = build_rate_tables(; backend = :cuda)
+ct = EmissionKernels.build_cooling_tables(; backend = :cuda)
+solve_chem!(rho, e, HII, H2I; …, rate_tables=rt, cool_tables=ct, dtfrac=0.2)
+```
 
 When `dust = true`, per-cell dust parameters must be supplied as length-`n` vectors:
 - `Z_rel` : metallicity relative to solar (dust-to-gas ratio ∝ Z_rel)
@@ -71,6 +93,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
                      fh::Real = 0.76, deuterium::Bool = false,
                      hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                      metals = nothing, rate_tables = nothing, cool_tables = nothing,
+                     dtfrac::Real = 0.1, workgroup_size::Int = 0,
                      dust::Bool = false,
                      Z_rel = nothing, G0 = nothing, A_V = nothing,
                      N_H = nothing, N_H2 = nothing,
@@ -119,11 +142,12 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
     d_H2I = to_device(be, collect(H2I),   P)
     d_HDI = deut ? to_device(be, collect(HDI), P) : device_zeros(be, P, (n,))
 
-    _evolve_k!(be)(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
-                   P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-                   hubble_expansion, P(adot_over_a),
-                   d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
-                   d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust; ndrange = n)
+    k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
+    k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
+       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
+       hubble_expansion, P(adot_over_a),
+       d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
+       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac); ndrange = n)
 
     e_int .= to_host(d_e)
     HII   .= to_host(d_HII)
@@ -149,6 +173,7 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
                             fh::Real = 0.76, deuterium::Bool = false,
                             hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                             rate_tables = nothing, cool_tables = nothing,
+                            dtfrac::Real = 0.1, workgroup_size::Int = 0,
                             backend::Symbol = :cuda, precision::Type = Float64)
     n  = length(rho)
     P  = precision
@@ -158,11 +183,12 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
     deut = deuterium && HDI !== nothing
     d_HDI = deut ? HDI : device_zeros(be, P, (n,))
     dz = device_zeros(be, P, (n,))     # metal and dust abundance pads (zero-copy path: no dust/metals)
-    _evolve_k!(be)(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
-                   P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-                   hubble_expansion, P(adot_over_a),
-                   dz, dz, dz, dz, false, rate_tables, cool_tables,
-                   dz, dz, dz, dz, dz, false; ndrange = n)
+    k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
+    k!(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
+       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
+       hubble_expansion, P(adot_over_a),
+       dz, dz, dz, dz, false, rate_tables, cool_tables,
+       dz, dz, dz, dz, dz, false, P(dtfrac); ndrange = n)
     KA.synchronize(be)
     return nothing
 end

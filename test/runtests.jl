@@ -48,4 +48,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_rate_tables.jl")
     # ── dust physics (rates, T_dust, shielding, network_step, evolve_cell) ─────
     include("test_dust.jl")
+    # ── performance knobs (dtfrac, workgroup_size, cell sort) ─────────────────
+    include("test_performance.jl")
 end

@@ -18,7 +18,7 @@ export k7_grid, k8_grid, k9_grid, k10_grid, k11_grid, k12_grid, k13_grid,
 # Stancil, Lepp & Dalgarno (1998), based on Wishart (1979).
 @inline function k7(T::Real)
     R = typeof(T)
-    return R(3.0e-16) * (T / R(300.0))^R(0.95) * exp(-T / R(9.32e3))
+    @fastmath return R(3.0e-16) * (T / R(300.0))^R(0.95) * exp(-T / R(9.32e3))
 end
 @scalarkernel k7
 
@@ -65,16 +65,18 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     if Tev > R(0.3)
-        lT = log(T)
-        return exp(-R(21237.15) / T) * (
-                 R(-3.3232183e-07)
-               + R(3.3735382e-07)  * lT
-               - R(1.4491368e-07)  * lT^R(2)
-               + R(3.4172805e-08)  * lT^R(3)
-               - R(4.7813720e-09)  * lT^R(4)
-               + R(3.9731542e-10)  * lT^R(5)
-               - R(1.8171411e-11)  * lT^R(6)
-               + R(3.5311932e-13)  * lT^R(7))
+        return @fastmath begin
+            lT = log(T)
+            exp(-R(21237.15) / T) * (
+                     R(-3.3232183e-07)
+                   + R(3.3735382e-07)  * lT
+                   - R(1.4491368e-07)  * lT^R(2)
+                   + R(3.4172805e-08)  * lT^R(3)
+                   - R(4.7813720e-09)  * lT^R(4)
+                   + R(3.9731542e-10)  * lT^R(5)
+                   - R(1.8171411e-11)  * lT^R(6)
+                   + R(3.5311932e-13)  * lT^R(7))
+        end
     else
         return R(TINY)
     end
@@ -87,7 +89,7 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     if Tev > R(0.3)
-        return R(4.4886e-9) * T^R(0.109127) * exp(-R(101858.0) / T)
+        @fastmath return R(4.4886e-9) * T^R(0.109127) * exp(-R(101858.0) / T)
     else
         return R(TINY)
     end
@@ -100,7 +102,7 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     if Tev > R(0.3)
-        return R(1.0670825e-10) * Tev^R(2.012) /
+        @fastmath return R(1.0670825e-10) * Tev^R(2.012) /
                (exp(R(4.463) / Tev) * (R(1.0) + R(0.2472) * Tev)^R(3.512))
     else
         return R(TINY)
@@ -114,16 +116,18 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     if Tev > R(0.04)
-        lTev = log(Tev)
-        return exp(R(-18.01849334273)
-                 + R(2.360852208681)     * lTev
-                 - R(0.2827443061704)    * lTev^R(2)
-                 + R(0.01623316639567)   * lTev^R(3)
-                 - R(0.03365012031362999)* lTev^R(4)
-                 + R(0.01178329782711)   * lTev^R(5)
-                 - R(0.001656194699504)  * lTev^R(6)
-                 + R(0.0001068275202678) * lTev^R(7)
-                 - R(2.631285809207e-6)  * lTev^R(8))
+        return @fastmath begin
+            lTev = log(Tev)
+            exp(R(-18.01849334273)
+                     + R(2.360852208681)     * lTev
+                     - R(0.2827443061704)    * lTev^R(2)
+                     + R(0.01623316639567)   * lTev^R(3)
+                     - R(0.03365012031362999)* lTev^R(4)
+                     + R(0.01178329782711)   * lTev^R(5)
+                     - R(0.001656194699504)  * lTev^R(6)
+                     + R(0.0001068275202678) * lTev^R(7)
+                     - R(2.631285809207e-6)  * lTev^R(8))
+        end
     else
         return R(TINY)
     end
@@ -136,19 +140,21 @@ end
     R = typeof(T)
     Tev = T / R(11605.0)
     if Tev > R(0.1)
-        lTev = log(Tev)
-        return exp(R(-20.37260896533324)
-                 + R(1.139449335841631)   * lTev
-                 - R(0.1421013521554148)  * lTev^R(2)
-                 + R(0.00846445538663)    * lTev^R(3)
-                 - R(0.0014327641212992)  * lTev^R(4)
-                 + R(0.0002012250284791)  * lTev^R(5)
-                 + R(0.0000866396324309)  * lTev^R(6)
-                 - R(0.00002585009680264) * lTev^R(7)
-                 + R(2.4555011970392e-6)  * lTev^R(8)
-                 - R(8.06838246118e-8)    * lTev^R(9))
+        return @fastmath begin
+            lTev = log(Tev)
+            exp(R(-20.37260896533324)
+                     + R(1.139449335841631)   * lTev
+                     - R(0.1421013521554148)  * lTev^R(2)
+                     + R(0.00846445538663)    * lTev^R(3)
+                     - R(0.0014327641212992)  * lTev^R(4)
+                     + R(0.0002012250284791)  * lTev^R(5)
+                     + R(0.0000866396324309)  * lTev^R(6)
+                     - R(0.00002585009680264) * lTev^R(7)
+                     + R(2.4555011970392e-6)  * lTev^R(8)
+                     - R(8.06838246118e-8)    * lTev^R(9))
+        end
     else
-        return R(2.56e-9) * Tev^R(1.78186)
+        @fastmath return R(2.56e-9) * Tev^R(1.78186)
     end
 end
 @scalarkernel k15
