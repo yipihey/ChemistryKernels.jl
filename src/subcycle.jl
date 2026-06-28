@@ -217,7 +217,12 @@ Dust physics is enabled by `dust = true`, which requires:
         else
             Gamma_pe_vol  = zero(R)
             Lambda_gg_vol = zero(R)
-            dust_rates    = nothing
+            # Use a zeros NamedTuple (NOT `nothing`) so `dust_rates` has ONE concrete type in
+            # both branches.  `dust` is a runtime kwarg, so `nothing | NamedTuple` would be a
+            # type-unstable Union that poisons network_step's return and boxes on the GPU
+            # (gpu_gc_pool_alloc → InvalidIRError).  network_step multiplies these coefficients
+            # in, so zeros are bit-identical to the `nothing` (no-dust) path, at zero cost.
+            dust_rates    = (; k_h2d = zero(R), k_grr = zero(R), k_lw = zero(R))
         end
 
         # cooling rate (volumetric, signed) + temstart shutoff (no cooling at
