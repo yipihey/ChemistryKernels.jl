@@ -57,6 +57,7 @@ module ChemistryKernels
 using KernelAbstractions
 const KA = KernelAbstractions
 import Adapt
+using LinearAlgebra: I
 
 # Radiative-channel physics (cooling coefficients, metal lines, CMB Compton) now lives
 # in the foundation package EmissionKernels; ChemistryKernels depends on it and its
@@ -150,6 +151,7 @@ include("network_step.jl")
 include("recombination.jl")
 include("rate_tables.jl")     # optional log–log rate lookup (uses recombination + rates_*)
 include("subcycle.jl")
+include("rosenbrock.jl")       # adaptive ROS2 integrator (drop-in for the subcycler)
 include("solve.jl")
 # Wave 5 — Lyα-mixing recombination for early-Universe / PMF science.
 include("tables.jl")

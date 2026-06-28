@@ -121,6 +121,7 @@ Dust physics is enabled by `dust = true`, which requires:
                              rate_tables = nothing, cool_tables = nothing,
                              itcap::Int = _SUB_ITMAX,
                              dtfrac::Real = 0.1,
+                             nsteps_out = nothing,
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
                              A_V::Real = 0.0, N_H::Real = 0.0, N_H2::Real = 0.0)
@@ -272,5 +273,6 @@ Dust physics is enabled by `dust = true`, which requires:
         ttot += dtit
     end
 
+    nsteps_out === nothing || (nsteps_out[] = iter)
     return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m), ttot   # ttot = consumed (≤ dt)
 end

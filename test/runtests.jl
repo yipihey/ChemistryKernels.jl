@@ -52,4 +52,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_performance.jl")
     # ── UInt16 log₂-encoded species storage ───────────────────────────────────
     include("test_u16_species.jl")
+    # ── adaptive ROS2 integrator (drop-in for the subcycler) ──────────────────
+    include("test_ros2.jl")
 end
