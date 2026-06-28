@@ -11,7 +11,7 @@ export solve_chem!
                             du, vu2, tu, dt, z, hubble, Om, OL, fh, deut, hexp, aoa,
                             @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals, rtab, ctab,
                             @Const(aZrel), @Const(aG0), @Const(aAV),
-                            @Const(aNH), @Const(aNH2), hasdust, dtfrac)
+                            @Const(aNH), @Const(aNH2), hasdust, dtfrac, itcap)
     i = @index(Global)
     @inbounds begin
         T   = eltype(e)
@@ -33,7 +33,7 @@ export solve_chem!
                                       fh=fh, deuterium=deut,
                                       hubble_expansion=hexp, adot_over_a=aoa, metals=mab,
                                       rate_tables=rtab, cool_tables=ctab,
-                                      dtfrac=dtfrac,
+                                      dtfrac=dtfrac, itcap=itcap,
                                       dust=hasdust, Z_rel=Z_rel, G0=G0_i,
                                       A_V=AV_i, N_H=NH_i, N_H2=NH2_i)
         e[i]   = en  / vu2
@@ -93,7 +93,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
                      fh::Real = 0.76, deuterium::Bool = false,
                      hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                      metals = nothing, rate_tables = nothing, cool_tables = nothing,
-                     dtfrac::Real = 0.1, workgroup_size::Int = 0,
+                     dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
                      dust::Bool = false,
                      Z_rel = nothing, G0 = nothing, A_V = nothing,
                      N_H = nothing, N_H2 = nothing,
@@ -147,7 +147,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
        P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
        hubble_expansion, P(adot_over_a),
        d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
-       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac); ndrange = n)
+       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
 
     e_int .= to_host(d_e)
     HII   .= to_host(d_HII)
@@ -173,7 +173,7 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
                             fh::Real = 0.76, deuterium::Bool = false,
                             hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                             rate_tables = nothing, cool_tables = nothing,
-                            dtfrac::Real = 0.1, workgroup_size::Int = 0,
+                            dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
                             backend::Symbol = :cuda, precision::Type = Float64)
     n  = length(rho)
     P  = precision
@@ -188,7 +188,7 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
        P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
        hubble_expansion, P(adot_over_a),
        dz, dz, dz, dz, false, rate_tables, cool_tables,
-       dz, dz, dz, dz, dz, false, P(dtfrac); ndrange = n)
+       dz, dz, dz, dz, dz, false, P(dtfrac), itcap; ndrange = n)
     KA.synchronize(be)
     return nothing
 end
@@ -206,7 +206,7 @@ export solve_chem_device!
                                  @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals,
                                  rtab, ctab,
                                  @Const(aZrel), @Const(aG0), @Const(aAV),
-                                 @Const(aNH), @Const(aNH2), hasdust, dtfrac)
+                                 @Const(aNH), @Const(aNH2), hasdust, dtfrac, itcap)
     i = @index(Global)
     @inbounds begin
         T = eltype(e)
@@ -229,7 +229,7 @@ export solve_chem_device!
                                           fh=fh, deuterium=deut,
                                           hubble_expansion=hexp, adot_over_a=aoa,
                                           metals=mab, rate_tables=rtab, cool_tables=ctab,
-                                          dtfrac=dtfrac,
+                                          dtfrac=dtfrac, itcap=itcap,
                                           dust=hasdust, Z_rel=Z_rel, G0=G0_i,
                                           A_V=AV_i, N_H=NH_i, N_H2=NH2_i)
         e[i] = en / vu2
@@ -288,7 +288,7 @@ function solve_chem_u16!(rho::AbstractVector, e_int::AbstractVector,
                           fh::Real = 0.76, deuterium::Bool = false,
                           hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                           metals = nothing, rate_tables = nothing, cool_tables = nothing,
-                          dtfrac::Real = 0.1, workgroup_size::Int = 0,
+                          dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
                           dust::Bool = false,
                           Z_rel = nothing, G0 = nothing, A_V = nothing,
                           N_H = nothing, N_H2 = nothing,
@@ -341,7 +341,7 @@ function solve_chem_u16!(rho::AbstractVector, e_int::AbstractVector,
        P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
        hubble_expansion, P(adot_over_a),
        d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
-       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac); ndrange = n)
+       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
 
     e_int   .= to_host(d_e)
     HII_u16 .= to_host(d_HII_u16)
@@ -365,7 +365,7 @@ function solve_chem_device_u16!(rho, e_int, HII_u16, H2I_u16, HDI_u16 = nothing;
                                  fh::Real = 0.76, deuterium::Bool = false,
                                  hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                                  rate_tables = nothing, cool_tables = nothing,
-                                 dtfrac::Real = 0.1, workgroup_size::Int = 0,
+                                 dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
                                  backend::Symbol = :cuda, precision::Type = Float32)
     n   = length(rho)
     P   = precision
@@ -380,7 +380,7 @@ function solve_chem_device_u16!(rho, e_int, HII_u16, H2I_u16, HDI_u16 = nothing;
        P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
        hubble_expansion, P(adot_over_a),
        dz, dz, dz, dz, false, rate_tables, cool_tables,
-       dz, dz, dz, dz, dz, false, P(dtfrac); ndrange = n)
+       dz, dz, dz, dz, dz, false, P(dtfrac), itcap; ndrange = n)
     KA.synchronize(be)
     return nothing
 end

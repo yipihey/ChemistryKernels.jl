@@ -52,4 +52,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_performance.jl")
     # ── UInt16 log₂-encoded species storage ───────────────────────────────────
     include("test_u16_species.jl")
+    # ── per-call sub-cycle cap (itcap) opt-in + resumable contract ────────────
+    include("test_itcap.jl")
 end
