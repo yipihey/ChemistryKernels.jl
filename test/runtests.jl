@@ -54,4 +54,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_u16_species.jl")
     # ── per-call sub-cycle cap (itcap) opt-in + resumable contract ────────────
     include("test_itcap.jl")
+    # ── phase-space-binned solve (one stiff solve per occupied bin) ────────────
+    include("test_binned.jl")
 end

@@ -151,6 +151,7 @@ include("recombination.jl")
 include("rate_tables.jl")     # optional log–log rate lookup (uses recombination + rates_*)
 include("subcycle.jl")
 include("solve.jl")
+include("binned.jl")              # phase-space-binned solve (one stiff solve per occupied bin)
 # Wave 5 — Lyα-mixing recombination for early-Universe / PMF science.
 include("tables.jl")
 include("recombination_clumping.jl")
