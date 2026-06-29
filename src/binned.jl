@@ -126,26 +126,64 @@ function solve_chem_binned!(rho::AbstractVector, e_int::AbstractVector,
     invtol = 1.0 / float(tol)
     flr(x) = x < _BIN_TINY ? _BIN_TINY : float(x)
     lk(x) = round(Int, log10(flr(x)) * invtol)
+    _prof = haskey(ENV, "CK_BIN_PROF"); _t = Ref(time())
+    _lap(s) = _prof && (nw = time(); println("  [binprof] ", rpad(s, 10), round((nw-_t[])*1000, digits=1), "ms"); _t[] = nw)
 
     # ── pass 1: assign each cell to a bin; accumulate Σlog(input) per bin ──
+    # Threaded reduce-by-key: each thread bins its chunk into a LOCAL dict + local
+    # accumulators (key-compute + accumulation is the O(N) cost, fully parallel), then a
+    # cheap serial merge combines the per-thread dicts (only ~nbins entries each — nbins
+    # is small, especially at high z).  binid[i] = global bin id.  nt=1 ⇒ plain serial.
+    nt = max(1, min(Threads.nthreads(), n))
     binid = Vector{Int}(undef, n)
+    locbin = Vector{Int}(undef, n)                         # per-thread local bin id per cell
+    # pre-allocate per-thread storage (each slot touched by exactly one task)
+    ld   = [Dict{NTuple{5,Int},Int}() for _ in 1:nt]       # per-thread key→local id
+    lsR  = [Float64[] for _ in 1:nt]; lsE = [Float64[] for _ in 1:nt]; lsH = [Float64[] for _ in 1:nt]
+    lsM  = [Float64[] for _ in 1:nt]; lsD = [Float64[] for _ in 1:nt]; lcnt = [Int[] for _ in 1:nt]
+    bnds = [round(Int, (t-1)*n/nt) for t in 1:nt+1]        # chunk boundaries (0-based offsets)
+    Threads.@threads for t in 1:nt
+        d = ld[t]; pR = lsR[t]; pE = lsE[t]; pH = lsH[t]; pM = lsM[t]; pD = lsD[t]; pc = lcnt[t]
+        @inbounds for i in (bnds[t]+1):bnds[t+1]
+            ri = flr(rho[i]); ei = flr(e_int[i])
+            hi = flr(HII[i]); mi = flr(H2I[i]); di = deut ? flr(HDI[i]) : _BIN_TINY
+            key = (lk(ri), lk(ei), lk(hi/ri), lk(mi/ri), deut ? lk(di/ri) : 0)
+            b = get(d, key, 0)
+            if b == 0
+                push!(pR, log(ri)); push!(pE, log(ei)); push!(pH, log(hi))
+                push!(pM, log(mi)); push!(pD, log(di)); push!(pc, 1)
+                b = length(pc); d[key] = b
+            else
+                pR[b]+=log(ri); pE[b]+=log(ei); pH[b]+=log(hi); pM[b]+=log(mi); pD[b]+=log(di); pc[b]+=1
+            end
+            locbin[i] = b
+        end
+    end
+    # serial merge (size = Σ per-thread bins ≈ nt·nbins, small)
     lut = Dict{NTuple{5,Int},Int}()
     sR = Float64[]; sE = Float64[]; sH = Float64[]; sM = Float64[]; sD = Float64[]; cnt = Int[]
-    @inbounds for i in 1:n
-        ri = flr(rho[i]); ei = flr(e_int[i])
-        hi = flr(HII[i]); mi = flr(H2I[i]); di = deut ? flr(HDI[i]) : _BIN_TINY
-        key = (lk(ri), lk(ei), lk(hi/ri), lk(mi/ri), deut ? lk(di/ri) : 0)
-        b = get(lut, key, 0)
-        if b == 0
-            push!(sR, log(ri)); push!(sE, log(ei)); push!(sH, log(hi))
-            push!(sM, log(mi)); push!(sD, log(di)); push!(cnt, 1)
-            b = length(cnt); lut[key] = b
-        else
-            sR[b]+=log(ri); sE[b]+=log(ei); sH[b]+=log(hi); sM[b]+=log(mi); sD[b]+=log(di); cnt[b]+=1
+    g_of = [Vector{Int}(undef, length(lcnt[t])) for t in 1:nt]     # local→global per thread
+    @inbounds for t in 1:nt
+        keyof = Vector{NTuple{5,Int}}(undef, length(lcnt[t]))      # invert thread dict: local id→key
+        for (k, l) in ld[t]; keyof[l] = k; end
+        for l in 1:length(lcnt[t])
+            k = keyof[l]; g = get(lut, k, 0)
+            if g == 0
+                push!(sR, lsR[t][l]); push!(sE, lsE[t][l]); push!(sH, lsH[t][l])
+                push!(sM, lsM[t][l]); push!(sD, lsD[t][l]); push!(cnt, lcnt[t][l])
+                g = length(cnt); lut[k] = g
+            else
+                sR[g]+=lsR[t][l]; sE[g]+=lsE[t][l]; sH[g]+=lsH[t][l]
+                sM[g]+=lsM[t][l]; sD[g]+=lsD[t][l]; cnt[g]+=lcnt[t][l]
+            end
+            g_of[t][l] = g
         end
-        binid[i] = b
     end
     nb = length(cnt)
+    Threads.@threads for t in 1:nt                                  # map cells to global bin ids
+        @inbounds for i in (bnds[t]+1):bnds[t+1]; binid[i] = g_of[t][locbin[i]]; end
+    end
+    _lap("bin+group")
 
     # ── representative inputs = per-bin geometric mean (consistent with log bins) ──
     repR = Vector{Float64}(undef, nb); repE = similar(repR); repH = similar(repR)
@@ -176,7 +214,9 @@ function solve_chem_binned!(rho::AbstractVector, e_int::AbstractVector,
             aD[o]=repD[b]*(ax==5 ? eh : 1.0)
         end
     end
+    _lap("aug-build")
     solve_chem!(aR, aE, aH, aM, deut ? aD : nothing; solveopts...)
+    _lap("rep-solve")
 
     # rep OUTPUTS (block 0)
     oE = @view aE[1:nb]; oH = @view aH[1:nb]; oM = @view aM[1:nb]; oD = @view aD[1:nb]
@@ -197,10 +237,11 @@ function solve_chem_binned!(rho::AbstractVector, e_int::AbstractVector,
         end
     end
 
-    # ── pass 2: scatter the response back (read-before-write per cell) ──
+    # ── pass 2: scatter the response back (read-before-write per cell; fully parallel) ──
     bcast = mapback === :broadcast
     fhf = float(fh)
-    @inbounds for i in 1:n
+    Threads.@threads for i in 1:n
+        @inbounds begin
         b = binid[i]; ri = float(rho[i]); cap = fhf*ri
         if bcast
             e_int[i] = oE[b]/repE[b] * e_int[i]
@@ -228,6 +269,8 @@ function solve_chem_binned!(rho::AbstractVector, e_int::AbstractVector,
             dd = HDI[i]; dd = dd < 0 ? zero(dd) : (dd > cap ? oftype(dd, cap) : dd); HDI[i] = dd
         end
         e_int[i] = e_int[i] < _BIN_TINY ? oftype(e_int[i], _BIN_TINY) : e_int[i]
+        end  # @inbounds
     end
+    _lap("scatter")
     return nb
 end
