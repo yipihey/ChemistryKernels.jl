@@ -2,3 +2,7 @@ Manifest.toml
 /docs/build/
 *.cov
 .DS_Store
+
+# built C-grackle oracle libraries (source in oracle/*.c; build with oracle/build_chem_oracle.sh)
+oracle/*.so
+oracle/*.dylib

@@ -9,6 +9,14 @@
 #
 # Every numeric literal is wrapped in R(...) so the math is fully generic in T.
 # `TINY` is imported from ChemistryKernels (= 1e-20).
+#
+# GPU-SAFETY: the Anninos-style fits (k9, k11, k14, k15) are exp(polynomial in lnT).
+# Their powers of `lnT` MUST be written as INTEGER LITERALS (`lTev^2`, not `lTev^R(2)`).
+# An integer literal lowers to `Base.power_by_squaring` (repeated ×), which is exact for a
+# NEGATIVE base; a Float exponent lowers to `pow(x,y)=exp(y·log(x))`, and on the GPU under
+# `@fastmath` `log(negative)=NaN`.  lnT < 0 whenever T < e·(scale) — i.e. across the whole
+# warm-gas H₂ regime (T ≲ 10⁴ K) — so a Float exponent silently NaNs every H₂ rate there on
+# CUDA f32 (CPU libm `pow` handles integer-valued exponents, hiding the bug off-GPU).
 
 export k7, k8, k9, k10, k11, k12, k13, k14, k15, k16, k17, k18, k19, k22
 export k7_grid, k8_grid, k9_grid, k10_grid, k11_grid, k12_grid, k13_grid,
@@ -47,7 +55,7 @@ end
         Tk = min(T, R(3.2e4))
         lTk = log10(Tk)
         return R(10.0)^(R(-18.20) - R(3.194) * lTk
-                        + R(1.786) * lTk^R(2) - R(0.2072) * lTk^R(3))
+                        + R(1.786) * lTk^2 - R(0.2072) * lTk^3)
     end
 end
 @scalarkernel k9
@@ -70,12 +78,12 @@ end
             exp(-R(21237.15) / T) * (
                      R(-3.3232183e-07)
                    + R(3.3735382e-07)  * lT
-                   - R(1.4491368e-07)  * lT^R(2)
-                   + R(3.4172805e-08)  * lT^R(3)
-                   - R(4.7813720e-09)  * lT^R(4)
-                   + R(3.9731542e-10)  * lT^R(5)
-                   - R(1.8171411e-11)  * lT^R(6)
-                   + R(3.5311932e-13)  * lT^R(7))
+                   - R(1.4491368e-07)  * lT^2
+                   + R(3.4172805e-08)  * lT^3
+                   - R(4.7813720e-09)  * lT^4
+                   + R(3.9731542e-10)  * lT^5
+                   - R(1.8171411e-11)  * lT^6
+                   + R(3.5311932e-13)  * lT^7)
         end
     else
         return R(TINY)
@@ -120,13 +128,13 @@ end
             lTev = log(Tev)
             exp(R(-18.01849334273)
                      + R(2.360852208681)     * lTev
-                     - R(0.2827443061704)    * lTev^R(2)
-                     + R(0.01623316639567)   * lTev^R(3)
-                     - R(0.03365012031362999)* lTev^R(4)
-                     + R(0.01178329782711)   * lTev^R(5)
-                     - R(0.001656194699504)  * lTev^R(6)
-                     + R(0.0001068275202678) * lTev^R(7)
-                     - R(2.631285809207e-6)  * lTev^R(8))
+                     - R(0.2827443061704)    * lTev^2
+                     + R(0.01623316639567)   * lTev^3
+                     - R(0.03365012031362999)* lTev^4
+                     + R(0.01178329782711)   * lTev^5
+                     - R(0.001656194699504)  * lTev^6
+                     + R(0.0001068275202678) * lTev^7
+                     - R(2.631285809207e-6)  * lTev^8)
         end
     else
         return R(TINY)
@@ -144,14 +152,14 @@ end
             lTev = log(Tev)
             exp(R(-20.37260896533324)
                      + R(1.139449335841631)   * lTev
-                     - R(0.1421013521554148)  * lTev^R(2)
-                     + R(0.00846445538663)    * lTev^R(3)
-                     - R(0.0014327641212992)  * lTev^R(4)
-                     + R(0.0002012250284791)  * lTev^R(5)
-                     + R(0.0000866396324309)  * lTev^R(6)
-                     - R(0.00002585009680264) * lTev^R(7)
-                     + R(2.4555011970392e-6)  * lTev^R(8)
-                     - R(8.06838246118e-8)    * lTev^R(9))
+                     - R(0.1421013521554148)  * lTev^2
+                     + R(0.00846445538663)    * lTev^3
+                     - R(0.0014327641212992)  * lTev^4
+                     + R(0.0002012250284791)  * lTev^5
+                     + R(0.0000866396324309)  * lTev^6
+                     - R(0.00002585009680264) * lTev^7
+                     + R(2.4555011970392e-6)  * lTev^8
+                     - R(8.06838246118e-8)    * lTev^9)
         end
     else
         @fastmath return R(2.56e-9) * Tev^R(1.78186)

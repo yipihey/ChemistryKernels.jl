@@ -56,4 +56,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_itcap.jl")
     # ── phase-space-binned solve (one stiff solve per occupied bin) ────────────
     include("test_binned.jl")
+    # ── reduced fast analytic H+H2 mode (evolve_cell_fast) ─────────────────────
+    include("test_fast.jl")
 end

@@ -150,6 +150,7 @@ include("network_step.jl")
 include("recombination.jl")
 include("rate_tables.jl")     # optional log–log rate lookup (uses recombination + rates_*)
 include("subcycle.jl")
+include("fast.jl")                # reduced fast analytic H+H2 mode (evolve_cell_fast)
 include("solve.jl")
 include("binned.jl")              # phase-space-binned solve (one stiff solve per occupied bin)
 # Wave 5 — Lyα-mixing recombination for early-Universe / PMF science.
