@@ -127,3 +127,28 @@ let CK = ChemistryKernels,
         @test all(isfinite, hd) && all(isfinite, md)
     end
 end
+
+@testset "fast analytic: negative rho/e domain guard (f16 hydro frontier)" begin
+    # f16 dual-energy hydro can hand rho <= 0 / e <= 0 at extreme shock and void
+    # frontiers (bamr256L6b: device DomainError at z~13, lmax=6 collapse).  The
+    # entry guards must make these cells benign (~1 K near-vacuum), never throw.
+    for (r, e) in ((-1.0e-24, 1.0e10), (1.0e-24, -1.0e10), (-1.0e-24, -1.0e10),
+                   (0.0, 0.0), (1.0e-24, 1.0e10))
+        for f in (CK.evolve_cell_analytic, CK.evolve_cell_fast)
+            en, hii, h2, _ = f(Float32(r), Float32(e), Float32(1e-4 * abs(r)),
+                               Float32(1e-6 * abs(r)), 1.0f13, 30.0f0; fh = 0.76)
+            @test isfinite(en) && isfinite(hii) && isfinite(h2)
+            @test en > 0
+        end
+    end
+    # batched u16 device path (CPU backend), whole-vector pathological block
+    n = 64
+    rho = fill(1.0f-3, n); rho[1] = -1.0f-3; rho[2] = 0.0f0     # code units
+    e   = fill(1.0f-7, n); e[3] = -1.0f-7; e[4] = 0.0f0
+    hii = fill(CK.encode_log2sp(1.0f-4), n); h2 = fill(CK.encode_log2sp(1.0f-6), n)
+    CK.solve_chem_analytic_u16!(rho, e, hii, h2;
+        a_value = 1/31.0, dt = 1.0e-3, density_units = 1.0e-21,
+        length_units = 3.0e22, time_units = 1.0e15, backend = :cpu,
+        precision = Float32)
+    @test all(isfinite, e)
+end
