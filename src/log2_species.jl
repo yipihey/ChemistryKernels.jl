@@ -51,7 +51,13 @@ All arithmetic is Float32 internally (GPU/Metal-safe).
     # Direct port of the CUDA enc_log2: compute log₂(x), map to [0,65535], clamp output.
     # Saturation: x ≤ 2^(−110) → t ≤ 0 → u=0; x ≥ 1 → t ≥ 65535 → u=65535.
     # log2(0) = −Inf in IEEE 754 → t = −Inf → clamped to 0 (sub-TINY fractions round to u=0).
-    l2 = log2(Float32(x))                          # −Inf for x=0; passes NaN through
+    # TOTAL over all f32: negatives (reflux corrections can drive a coarse ρ,
+    # hence ρX, slightly negative) and NaN both clamp to the codec floor —
+    # log2(neg) THROWS on device (DomainError aborts the kernel), and
+    # max()-style guards pass NaN through, so the clamp must be ifelse-form.
+    xf = Float32(x)
+    xf = ifelse(xf > 0.0f0, xf, 0.0f0)             # NaN > 0 is false → floor
+    l2 = log2(xf)                                  # −Inf for x=0 → u = 0
     t  = (l2 - _LOG2SP_LO) * _LOG2SP_SCALE        # CUDA: (l2 + 110) * (65535/110)
     tc = clamp(t + 0.5f0, 0f0, 65535f0)           # clamp+round-by-truncation (CUDA fmin/fmax)
     unsafe_trunc(UInt16, unsafe_trunc(Int32, tc))  # Int32 step avoids UInt16 wrap on truncation

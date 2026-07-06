@@ -41,7 +41,11 @@ network. Pure.
 
     P    = gm1 * rho * eint                        # raw pressure [erg/cm³]
     Traw = P / (kB * n_tot)                        # utem·P_code/nd_code, CGS form
-    temp = max(Traw, one(R))                       # max(...,1) temperature estimate
+    temp = clamp(Traw, one(R), R(1.0e9))           # [1 K, 1e9 K]: the upper cap
+                                                   # guards degenerate inputs
+                                                   # (vacuum cells with garbage
+                                                   # e) from overflowing the
+                                                   # rate/cooling fits
 
     # GammaH2Inverse: 0.5*5 unless there's a reasonable amount of H2.
     GammaH2Inv = R(0.5) * R(5)

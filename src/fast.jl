@@ -49,10 +49,10 @@ convention, `H2I_m` = 2·n(H₂)·m_H).  Pure; ~2× cheaper per substep than `ev
     # shock and void frontiers; unguarded they reach device sqrt/log/pow
     # (DomainError aborts the kernel).  Clamp to physical-positive; the T floor
     # in gas_temperature then makes the cell a benign ~1 K near-vacuum.
-    rho  = max(rho, R(1.0e-35))
-    e    = max(e, tiny)
-    HII_m = max(HII_m, zero(R))
-    H2I_m = max(H2I_m, zero(R))
+    rho  = ifelse(rho > R(1.0e-35), rho, R(1.0e-35))   # ifelse: NaN>x is false
+    e    = ifelse(e > tiny, e, tiny)                    # (max() passes NaN through)
+    HII_m = ifelse(HII_m > zero(R), HII_m, zero(R))
+    H2I_m = ifelse(H2I_m > zero(R), H2I_m, zero(R))
     d    = rho / mh
     z0   = R(z)
     Hz0  = hubble_z_of(z0; hubble = hubble, Om = Om, OL = OL)
@@ -181,10 +181,10 @@ iteration count, not the rate fits), so the fits remain the default.
     # shock and void frontiers; unguarded they reach device sqrt/log/pow
     # (DomainError aborts the kernel).  Clamp to physical-positive; the T floor
     # in gas_temperature then makes the cell a benign ~1 K near-vacuum.
-    rho  = max(rho, R(1.0e-35))
-    e    = max(e, tiny)
-    HII_m = max(HII_m, zero(R))
-    H2I_m = max(H2I_m, zero(R))
+    rho  = ifelse(rho > R(1.0e-35), rho, R(1.0e-35))   # ifelse: NaN>x is false
+    e    = ifelse(e > tiny, e, tiny)                    # (max() passes NaN through)
+    HII_m = ifelse(HII_m > zero(R), HII_m, zero(R))
+    H2I_m = ifelse(H2I_m > zero(R), H2I_m, zero(R))
     d    = rho / mh
     z0   = R(z)
     Hz0  = hubble_z_of(z0; hubble = hubble, Om = Om, OL = OL)
@@ -366,7 +366,8 @@ export solve_chem_analytic_device!
         T = eltype(e)
         # clamp: f16 hydro can hand rho ≤ 0; the re-encode below divides by r
         # and log2's the ratio (device DomainError without the guard)
-        r = max(rho[i] * du, T(1.0e-35))                   # physical total density (CGS)
+        r0 = rho[i] * du
+        r = ifelse(r0 > T(1.0e-35), r0, T(1.0e-35))        # NaN-safe (physical CGS)
         hii_m = decode_log2sp(T, HII_u16[i]) * r           # UInt16 fraction → CGS mass density
         h2i_m = decode_log2sp(T, H2I_u16[i]) * r
         en, hii, h2, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
