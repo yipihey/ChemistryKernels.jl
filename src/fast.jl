@@ -444,3 +444,77 @@ function solve_chem_analytic_device_u16!(rho, e_int, HII_u16, H2I_u16;
     return nothing
 end
 export solve_chem_analytic_device_u16!
+
+# ── hybrid analytic ⇄ full-network per-cell dispatch ─────────────────────────
+# The analytic path (evolve_cell_analytic) is a reduced primordial H+H₂ network:
+# fast, great for IC generation, but MISSING 3-body H₂ formation and collisional
+# H₂ dissociation — the physics that governs the dense (n ≳ 1e8 cm⁻³) collapsing
+# core.  This kernel switches to the FULL network (evolve_cell) per cell where the
+# physical density r exceeds `rho_switch` (CGS g/cm³), keeping the cheap analytic
+# path everywhere else.  Same 2-species (HII, H2I) u16 contract as the analytic
+# path — the full network reconstructs the intermediates (HM, H2II, He, e)
+# internally.  Warp divergence is minimal in a collapse (density is spatially
+# coherent → warps are all-dense or all-analytic).
+@kernel function _evolve_hybrid_k_u16!(e, HII_u16, H2I_u16, @Const(rho), du, vu2, tu, dt, z,
+                                       hubble, Om, OL, fh, hexp, aoa, rtab, ctab, dtfrac, itcap,
+                                       rho_switch)
+    i = @index(Global)
+    @inbounds begin
+        T = eltype(e)
+        r0 = rho[i] * du
+        r = ifelse(r0 > T(1.0e-35), r0, T(1.0e-35))        # NaN-safe (physical CGS)
+        hii_m = decode_log2sp(T, HII_u16[i]) * r
+        h2i_m = decode_log2sp(T, H2I_u16[i]) * r
+        local en, hii, h2
+        if r > T(rho_switch)                               # dense core → FULL network
+            en, hii, h2, _, _ = evolve_cell(r, e[i]*vu2, hii_m, h2i_m, zero(T), dt*tu, z;
+                                            hubble=hubble, Om=Om, OL=OL, fh=fh, deuterium=false,
+                                            hubble_expansion=hexp, adot_over_a=aoa,
+                                            rate_tables=rtab, cool_tables=ctab,
+                                            itcap=itcap, dtfrac=dtfrac)
+        else                                               # envelope → analytic IC path
+            en, hii, h2, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
+                                            hubble=hubble, Om=Om, OL=OL, fh=fh,
+                                            hubble_expansion=hexp, adot_over_a=aoa,
+                                            rate_tables=rtab, cool_tables=ctab,
+                                            itcap=itcap, dtfrac=dtfrac)
+        end
+        e[i]       = en / vu2
+        HII_u16[i] = encode_log2sp(hii / r)
+        H2I_u16[i] = encode_log2sp(h2  / r)
+    end
+end
+
+"""
+    solve_chem_hybrid_device_u16!(rho, e_int, HII_u16, H2I_u16; rho_switch, …)
+
+Per-cell dispatch between the analytic reduced network and the full `evolve_cell`
+network: cells with physical density `> rho_switch` (CGS g/cm³) run the FULL
+network (3-body H₂ formation + collisional dissociation — the dense-core physics
+the analytic path omits), all others run the cheap analytic path.  Same device
+buffers and 2-species (HII, H2I) u16 contract as
+[`solve_chem_analytic_device_u16!`](@ref).  `rho_switch → 0` ⇒ full network
+everywhere; `rho_switch → ∞` ⇒ pure analytic (identical to the analytic solver).
+"""
+function solve_chem_hybrid_device_u16!(rho, e_int, HII_u16, H2I_u16;
+                                       rho_switch::Real,
+                                       a_value::Real, dt::Real, density_units::Real,
+                                       length_units::Real, time_units::Real,
+                                       hubble::Real = 71.0, Om::Real = 0.27, OL::Real = 0.73,
+                                       fh::Real = 0.76, hubble_expansion::Bool = false,
+                                       adot_over_a::Real = NaN, rate_tables = nothing,
+                                       cool_tables = nothing,
+                                       dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX,
+                                       workgroup_size::Int = 0, backend::Symbol = :cuda,
+                                       precision::Type = Float32)
+    n  = length(rho); P = precision; be = ChemistryKernels.backend(backend)
+    du = P(density_units); vu2 = P((length_units/time_units)^2); tu = P(time_units)
+    z  = P(1.0/a_value - 1.0)
+    k! = workgroup_size > 0 ? _evolve_hybrid_k_u16!(be, workgroup_size) : _evolve_hybrid_k_u16!(be)
+    k!(e_int, HII_u16, H2I_u16, rho, du, vu2, tu, P(dt), z, P(hubble), P(Om), P(OL), P(fh),
+       hubble_expansion, P(adot_over_a), rate_tables, cool_tables, P(dtfrac), itcap,
+       P(rho_switch); ndrange = n)
+    KA.synchronize(be)
+    return nothing
+end
+export solve_chem_hybrid_device_u16!
