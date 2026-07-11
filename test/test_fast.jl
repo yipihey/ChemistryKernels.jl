@@ -37,7 +37,7 @@ let CK = ChemistryKernels,
             @test 0.3*(sR.nH2/nH) < sF.nH2/nH < 3*(sR.nH2/nH)   # f_H2 order-unity
         end
 
-        @testset "minihalo collapse: relic electron freeze + H2 cooling" begin
+        @testset "minihalo collapse: electrons recombine + H2 cooling" begin
             zc=25.0; N=250; ns=exp.(range(log(nHbar(zc)),log(1e4),length=N))
             e0=KB*max(CK.comp2_cmb(zc)*0.5,60.0)/((GAMMA-1)*1.22*MH)
             sF=(nHII=2e-4*ns[1],nH2=2e-6*ns[1],e=e0); sR=sF
@@ -47,15 +47,21 @@ let CK = ChemistryKernels,
                 sF=(nHII=a[1],nH2=a[2],e=a[3]); sR=(nHII=b[1],nH2=b[2],e=b[3])
             end
             nH=1e4
-            @test isapprox(sF.nHII/nH, sR.nHII/nH; rtol=0.05)   # relic x_e freeze matches (~3.6e-5)
-            @test isapprox(sF.nH2/nH,  sR.nH2/nH;  rtol=0.15)   # halo f_H2 within 15%
+            # relic x_e (2e-4 IC) RECOMBINES to ~7e-8 during collapse (case-B, no spurious
+            # collisional floor); H⁻ channel self-halts ⇒ f_H2 saturates ~4-5e-4.  fast≈full.
+            @test isapprox(sF.nHII/nH, sR.nHII/nH; rtol=0.05)   # recombined x_e (~7e-8), fast≈full
+            @test isapprox(sF.nH2/nH,  sR.nH2/nH;  rtol=0.25)   # halo f_H2 ~4e-4, fast≈full ±25%
+            @test sF.nH2/nH < 3e-3                              # SELF-HALTED (not the old 0.1 over-form)
             @test 60 < gT(nH,sF.nHII,sF.nH2,sF.e) < 200         # cooled to the H2 floor
         end
 
-        @testset "recombination-only cell freezes at the k57/k58 relic value" begin
+        @testset "recombination-only cell recombines away (no spurious collisional floor)" begin
             nH=1e4; T=100.0; e=KB*T/((GAMMA-1)*1.22*MH); zc=25.0
             r=CK.evolve_cell_fast(nH*MH/FH, e, 4e-5*nH*MH, 2e-12*nH*MH, 1e16, zc; fh=FH)
-            @test 2e-5 < r[2]/(nH*MH) < 6e-5                    # frozen near relic, not → 0
+            # no ionizing source ⇒ x_e recombines FAR below the 4e-5 IC (case-B).  The former
+            # k57/k58 1e-20 floor wrongly FROZE it at ~3.6e-5 (a fake collisional-ionisation
+            # source at T where it should be ~0) → over-formed H2 to f_H2~0.1 in long collapses.
+            @test 0.0 < r[2]/(nH*MH) < 1.0e-6                   # recombined away, not frozen; no NaN
         end
     end
 
@@ -68,8 +74,9 @@ let CK = ChemistryKernels,
         end
         @testset "minihalo collapse matches the full network" begin
             a=halo(anal); b=halo(full); nH=1e4
-            @test isapprox(a.nHII/nH, b.nHII/nH; rtol=0.05)     # relic x_e freeze
-            @test isapprox(a.nH2/nH,  b.nH2/nH;  rtol=0.15)     # halo f_H2 within 15%
+            @test isapprox(a.nHII/nH, b.nHII/nH; rtol=0.05)     # recombined x_e (~7e-8), anal≈full
+            @test isapprox(a.nH2/nH,  b.nH2/nH;  rtol=0.25)     # halo f_H2 ~5e-4, anal≈full ±25%
+            @test a.nH2/nH < 3e-3                               # H⁻ self-halts (no over-formation)
             @test 60 < gT(nH,a.nHII,a.nH2,a.e) < 200            # cooled to the H2 floor
         end
     end

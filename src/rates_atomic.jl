@@ -94,20 +94,23 @@ end
 
 # ── k57 : HI + HI → HII + HI + e  (collisional ionisation) ──────────────────
 # Fit: Lenzuni, Chernoff & Salpeter (1991); cross-sections: Gealy & van Zyl (1987).
-# Branch: T≤3e3 → tiny.
+# The Boltzmann factor exp(−1.578e5/T) makes this NEGLIGIBLE below ~5000 K (needs
+# 13.6 eV; underflows to ~0 at collapse temperatures) — NO low-T floor.  A former
+# 1e-20 floor at T≤3e3 K was a spurious persistent electron source: it pinned
+# x_e≈√(k57 n_HI²/k2)~3e-5 at the H₂-cooling floor (~170 K), which kept the H⁻
+# channel alive and let f_H2 over-grow to ~0.1 instead of saturating ~1e-3.  Without
+# it, electrons recombine away (case-B, fast) and H⁻ formation self-halts (correct).
 @inline function k57(T::Real)
     R = typeof(T)
-    T <= R(3.0e3) && return R(1e-20)
     @fastmath return R(1.2e-17) * T^R(1.2) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k57
 
 # ── k58 : HI + HeI → HII + HeI + e  (collisional ionisation) ────────────────
 # Fit: Lenzuni, Chernoff & Salpeter (1991); cross-sections: van Zyl, Le & Amme (1981).
-# Branch: T≤3e3 → tiny.
+# Boltzmann-suppressed → ~0 below ~5000 K; NO low-T floor (see k57).
 @inline function k58(T::Real)
     R = typeof(T)
-    T <= R(3.0e3) && return R(1e-20)
     @fastmath return R(1.75e-17) * T^R(1.3) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k58
