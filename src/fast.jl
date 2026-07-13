@@ -379,13 +379,15 @@ iteration count, not the rate fits), so the fits remain the default.
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
         yHI  = max(fhd - yHII - yH2I, tiny)
         yde  = yHII
-        # advance He⁺ over the substep: 3-level Saha while fast (z>3000), else the HyRec-2
-        # He I freeze-out rate (backward-Euler) — this captures the slow z≈2000-2500 He⁺→He⁰
-        # freeze-out (the semi-forbidden 2³P / 2¹P-escape physics) that Saha alone misses.
+        # advance He⁺ over the substep: 3-level Saha only above z≈4500 (where He²⁺ is
+        # non-negligible and the HyRec He I rate — which assumes He²⁺≈0 — does not apply);
+        # below that use the HyRec-2 He I rate (backward-Euler) all the way, so it captures
+        # the slow z≈2000-2500 He⁺→He⁰ freeze-out (semi-forbidden 2³P / 2¹P-escape) WITHOUT
+        # a hard Saha→rate switch at z=3000 that left a few-% seam in the transition region.
         if track_He
             _she1, _she2 = helium_saha_pair(Tc)
             _neh2 = max(yHII + xHeII*nH_h, tiny)
-            if zt > R(3000)
+            if zt > R(4500)
                 _r1 = _she1/_neh2; _r2 = _she2/_neh2
                 xHeII = fHe * _r1 / (one(R) + _r1 + _r1*_r2)
             else
