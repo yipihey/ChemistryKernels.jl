@@ -155,8 +155,9 @@ end
 
 Fully closed-form variant of [`evolve_cell_fast`](@ref) — **no stiff/BDF sub-cycling
 of the chemistry**.  Each step advances x_HII by the exact Riccati solution
-(recombination vs the k57/k58 ionization floor), x_H2 by a pure formation quadrature
-(H₂ is only formed below ~10⁴ K — the collisional-dissociation channels are frozen),
+(recombination vs the k57/k58 ionization floor), x_H2 by the exact backward-Euler
+balance of formation (H⁻ + H₂⁺ + 3-body) against collisional dissociation
+(k13·n_HI + k11·n_HII + k12·n_e — linear in n_H2, so still one closed-form division),
 and the energy by the analytic Compton exponential + explicit non-Compton cooling.
 The step is limited ONLY by the non-Compton cooling time (the Compton stiffness is
 handled analytically), so Compton-locked gas takes a single step.  Same accuracy as
@@ -222,12 +223,13 @@ iteration count, not the rate fits), so the fits remain the default.
             k2   = peebles_k2(T, yHI, Hz)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k15v=k15(T)
+            k11v=k11(T); k12v=k12(T); k13v=k13(T)
             k22v=k22(T); k57v=k57(T); k58v=k58(T); k27v=k27_cmb(Tc); k28v=k28_cmb(Tc)
         else
             K = table_rates(rate_tables, T, yHI, Hz, cmb_rates(Tc))
             k2=K.k2; kb1s=K.k_beta1s; k1v=K.k1; k7v=K.k7; k8v=K.k8; k9v=K.k9
-            k10v=K.k10; k15v=K.k15; k22v=K.k22; k57v=K.k57; k58v=K.k58
-            k27v=K.k27; k28v=K.k28
+            k10v=K.k10; k15v=K.k15; k11v=K.k11; k12v=K.k12; k13v=K.k13
+            k22v=K.k22; k57v=K.k57; k58v=K.k58; k27v=K.k27; k28v=K.k28
         end
 
         # cooling & the Compton/non-Compton split
@@ -258,10 +260,17 @@ iteration count, not the rate fits), so the fits remain the default.
         # ── x_HII: exact Riccati (recomb k2 vs the k57/k58/CMB ionization source) ──
         scH  = k57v*yHI*yHI + k58v*yHI*yHeI/R(4) + kb1s*yHI + k1v*yHI*yde
         yHII = _riccati(yHII, k2, scH, dtc)
-        # ── x_H2: pure formation quadrature (H⁻ + H₂⁺ closed-form channels + 3-body) ──
+        # ── x_H2: formation (H⁻ + H₂⁺ closed-form channels + 3-body) vs collisional
+        #    dissociation, backward-Euler — unconditionally stable, still fully closed-form
+        #    (one division, NO subcycle).  acH2 = k13·n_HI + k11·n_HII + k12·n_e : the
+        #    destruction the old pure-formation quadrature FROZE; it matters once the
+        #    compressing core warms toward ~few×10³ K (H₂ + H → 3H), pulling f_H2 back
+        #    toward its formation/dissociation balance instead of accumulating unbounded.
         nHM   = k7v*yHI*yde  / ((k8v + k15v)*yHI + k27v + tiny)
         nH2II = k9v*yHI*yHII / (k10v*yHI + k28v + tiny)
-        yH2I += R(2)*(k8v*nHM*yHI + k10v*nH2II*yHI + k22v*yHI*yHI*yHI) * dtc
+        scH2  = R(2)*(k8v*nHM*yHI + k10v*nH2II*yHI + k22v*yHI*yHI*yHI)
+        acH2  = k13v*yHI + k11v*yHII + k12v*yde
+        yH2I  = (yH2I + scH2*dtc) / (one(R) + acH2*dtc)
 
         yH2I = yH2I < tiny ? tiny : (yH2I > fhd ? fhd : yH2I)
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
