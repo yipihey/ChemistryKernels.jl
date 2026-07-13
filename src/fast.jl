@@ -255,7 +255,17 @@ iteration count, not the rate fits), so the fits remain the default.
         # per-iteration transcendental fits for a branchless interpolation — the GPU hot
         # path.  Only the pure-T rates this mode needs are pulled from the NamedTuple.
         if rate_tables === nothing
-            k2   = peebles_k2(T, yHI, Hz)
+            # H recombination: RECFAST-v2 fudge (α_B×1.125 + the Hswitch Gaussian on the
+            # Lyα K-factor) — the multilevel-cascade speed-up that brings the effective-
+            # 3-level Peebles rate to HyRec/CosmoRec (closes the freeze-out tail).  Applied
+            # only in the H-recombination epoch (evolve_z & z<1600) where the RADIATIVE
+            # recombination dominates and the fudge is calibrated; at z>1600 (He era, H
+            # Saha) the collisional terms dominate and the fudge is neither calibrated nor
+            # cleanly cancelling, so leave it off.  Un-fudged in the collapse (dense gas).
+            k2   = (evolve_z && zt < R(1600)) ?
+                   peebles_k2_mixing(T, yHI, yHI, Hz; fudge = R(1.125),
+                                     gauss = R(recfast_gauss_factor(zt))) :
+                   peebles_k2(T, yHI, Hz)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k15v=k15(T)
             k11v=k11(T); k12v=k12(T); k13v=k13(T); k14v=k14(T); k16v=k16(T); k17v=k17(T); k19v=k19(T)
