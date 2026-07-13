@@ -134,6 +134,16 @@ Dust physics is enabled by `dust = true`, which requires:
                              A_V::Real = 0.0, N_H::Real = 0.0, N_H2::Real = 0.0)
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
+    # domain guard (match evolve_cell_analytic/fast): f16/f32 hydro + dual-energy
+    # can hand rho ≤ 0, e ≤ 0, or X·rho < 0 at shock/void frontiers and thermal-
+    # underflow cells.  Unguarded, e = 0 makes T/e = Inf in the Compton frequency
+    # Kc → NaN, and ONE such cell poisons the CFL/dt reduction and kills the run.
+    # Clamp to physical-positive; the T floor then makes such a cell a benign ~1 K.
+    rho   = ifelse(rho > R(1.0e-35), rho, R(1.0e-35))   # ifelse: NaN>x is false
+    e     = ifelse(e > tiny, e, tiny)                    # (max() would pass NaN through)
+    HII_m = ifelse(HII_m > zero(R), HII_m, zero(R))
+    H2I_m = ifelse(H2I_m > zero(R), H2I_m, zero(R))
+    deuterium && (HDI_m = ifelse(HDI_m > zero(R), HDI_m, zero(R)))
     d    = rho / mh                       # network density (∝ n)
     z0   = R(z)                           # redshift at step BEGIN
     Hz0  = hubble_z_of(z0; hubble = hubble, Om = Om, OL = OL)
