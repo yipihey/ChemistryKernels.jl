@@ -223,12 +223,13 @@ iteration count, not the rate fits), so the fits remain the default.
             k2   = peebles_k2(T, yHI, Hz)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k15v=k15(T)
-            k11v=k11(T); k12v=k12(T); k13v=k13(T)
+            k11v=k11(T); k12v=k12(T); k13v=k13(T); k14v=k14(T); k16v=k16(T); k17v=k17(T); k19v=k19(T)
             k22v=k22(T); k57v=k57(T); k58v=k58(T); k27v=k27_cmb(Tc); k28v=k28_cmb(Tc)
         else
             K = table_rates(rate_tables, T, yHI, Hz, cmb_rates(Tc))
             k2=K.k2; kb1s=K.k_beta1s; k1v=K.k1; k7v=K.k7; k8v=K.k8; k9v=K.k9
             k10v=K.k10; k15v=K.k15; k11v=K.k11; k12v=K.k12; k13v=K.k13
+            k14v=K.k14; k16v=K.k16; k17v=K.k17; k19v=K.k19
             k22v=K.k22; k57v=K.k57; k58v=K.k58; k27v=K.k27; k28v=K.k28
         end
 
@@ -266,8 +267,16 @@ iteration count, not the rate fits), so the fits remain the default.
         #    destruction the old pure-formation quadrature FROZE; it matters once the
         #    compressing core warms toward ~few×10³ K (H₂ + H → 3H), pulling f_H2 back
         #    toward its formation/dissociation balance instead of accumulating unbounded.
-        nHM   = k7v*yHI*yde  / ((k8v + k15v)*yHI + k27v + tiny)
+        # H⁻ / H₂⁺ quasi-steady-state.  The H⁻ denominator now carries the FULL
+        # destruction set (matching the network's equilibrium_HM): associative
+        # detachment (k8+k15)·n_HI + mutual neutralization by the ionized species
+        # (k16+k17)·n_HII + k14·n_e + k19·n_H2II + CMB photodetachment k27.  These
+        # ionized-species sinks are ~0.1% of k8·n_HI at collapse ionization (x_e≪1)
+        # so they don't shift the cold-collapse H₂, but they make the H⁻ equilibrium
+        # exact in the recombination era (x_e→1) too.  n_H2II first for the k19 term.
         nH2II = k9v*yHI*yHII / (k10v*yHI + k28v + tiny)
+        nHM   = k7v*yHI*yde  / ((k8v + k15v)*yHI + (k16v + k17v)*yHII +
+                                 k14v*yde + k19v*nH2II + k27v + tiny)
         scH2  = R(2)*(k8v*nHM*yHI + k10v*nH2II*yHI + k22v*yHI*yHI*yHI)
         acH2  = k13v*yHI + k11v*yHII + k12v*yde
         yH2I  = (yH2I + scH2*dtc) / (one(R) + acH2*dtc)
