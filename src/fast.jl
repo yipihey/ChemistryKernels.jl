@@ -170,8 +170,15 @@ end
 
 """
     evolve_cell_analytic(rho, e, HII_m, H2I_m, dt, z; hubble, Om, OL, fh,
-                         hubble_expansion, adot_over_a, cool_tables, itcap, dtfrac)
-        -> (e, HII_m, H2I_m, ttot)
+                         hubble_expansion, adot_over_a, cool_tables, itcap, dtfrac,
+                         xHeII_in = NaN)
+        -> (e, HII_m, H2I_m, ttot, xHeII)
+
+`xHeII_in` (optional, n_HeII/n_H): when supplied the caller CARRIES He⁺ across steps
+and it is EVOLVED — 3-level Saha while He recombination is fast (z>3000), the HyRec-2
+He I rate (`helium_HeI_rate_AB`, semi-forbidden 2³P + 2¹P-escape) for the slow
+z≈2000-2500 freeze-out — and returned as the 5th value.  Default `NaN` ⇒ He neutral
+(collapse) or, for hot/shock gas (Tc>5000K), the stateless Saha QSSA.
 
 Fully closed-form variant of [`evolve_cell_fast`](@ref) — **no stiff/BDF sub-cycling
 of the chemistry**.  Each step advances x_HII by the exact Riccati solution
@@ -195,7 +202,8 @@ iteration count, not the rate fits), so the fits remain the default.
                                       fh = FH_DEFAULT, hubble_expansion::Bool = false,
                                       adot_over_a = NaN, rate_tables = nothing,
                                       cool_tables = nothing,
-                                      itcap::Int = _SUB_ITMAX, dtfrac::Real = 0.1)
+                                      itcap::Int = _SUB_ITMAX, dtfrac::Real = 0.1,
+                                      xHeII_in = NaN)
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     # domain guard: f16 hydro can hand rho <= 0 / e <= 0 / X*rho < 0 at extreme
@@ -218,6 +226,13 @@ iteration count, not the rate fits), so the fits remain the default.
     yH2I = H2I_m / mh
     yHI  = max(fhd - yHII - yH2I, tiny)
     yde  = yHII
+    # He⁺ freeze-out state (cosmological recombination): when xHeII_in is supplied the
+    # caller CARRIES He⁺ across steps and we EVOLVE it (HyRec-2 He I rate below), which
+    # captures the z≈2000-2500 slow freeze-out that Saha alone misses.  fHe = n_He/n_H.
+    track_He = !isnan(xHeII_in)
+    fHe   = (one(R) - R(fh)) / (R(4) * R(fh))
+    nH_h  = fhd
+    xHeII = track_He ? R(xHeII_in) : zero(R)
 
     Tc0  = comp2_cmb(z0); c10 = comp1_cmb(z0)
     f    = R(dtfrac)
@@ -252,14 +267,18 @@ iteration count, not the rate fits), so the fits remain the default.
             k14v=K.k14; k16v=K.k16; k17v=K.k17; k19v=K.k19
             k22v=K.k22; k57v=K.k57; k58v=K.k58; k27v=K.k27; k28v=K.k28
         end
-        # He ionization QSSA (recombination-era electron contribution): He recombines
-        # HeIII→HeII (z~6000) then HeII→HeI (z~2500).  Gated on Tc — HeII/HeIII → 0 once
-        # the CMB cools, so it's inert (and skipped) for the collapse.  Folding He⁺+2He²⁺
-        # into n_e drives BOTH the H recombination (Riccati source) and the Compton cooling.
-        # (Analytic-fit path; the GPU rate-table path keeps He neutral for now.)
-        if Tc > R(5000) && rate_tables === nothing
-            _sh1, _sh2 = helium_saha_pair(Tc)
-            _, nHeII, nHeIII = helium_equilibrium(_sh1, _sh2, k3(T), k4(T), k5(T), k6(T),
+        # He electron contribution to n_e — drives BOTH the H recombination (Riccati
+        # source) and the Compton cooling.  track_He: fold the CARRIED He⁺ (+ He²⁺ Saha
+        # on top); else the stateless Saha QSSA for hot/shock-ionized gas (Tc>5000).
+        # Both inert for the collapse (He neutral) — the analytic-fit path only for now.
+        if track_He
+            _shh1, _shh2 = helium_saha_pair(Tc)
+            _neh    = max(yHII, tiny)
+            _xHeIII = xHeII * _shh2 / _neh
+            yde     = yHII + (xHeII + R(2)*_xHeIII) * nH_h
+        elseif Tc > R(5000) && rate_tables === nothing
+            _shh1, _shh2 = helium_saha_pair(Tc)
+            _, nHeII, nHeIII = helium_equilibrium(_shh1, _shh2, k3(T), k4(T), k5(T), k6(T),
                                                   yde, yHeI/R(4))
             yde = yHII + nHeII + R(2)*nHeIII
         end
@@ -350,9 +369,23 @@ iteration count, not the rate fits), so the fits remain the default.
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
         yHI  = max(fhd - yHII - yH2I, tiny)
         yde  = yHII
+        # advance He⁺ over the substep: 3-level Saha while fast (z>3000), else the HyRec-2
+        # He I freeze-out rate (backward-Euler) — this captures the slow z≈2000-2500 He⁺→He⁰
+        # freeze-out (the semi-forbidden 2³P / 2¹P-escape physics) that Saha alone misses.
+        if track_He
+            _she1, _she2 = helium_saha_pair(Tc)
+            _neh2 = max(yHII + xHeII*nH_h, tiny)
+            if zt > R(3000)
+                _r1 = _she1/_neh2; _r2 = _she2/_neh2
+                xHeII = fHe * _r1 / (one(R) + _r1 + _r1*_r2)
+            else
+                _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, yHI/nH_h, xHeII, fHe)
+                xHeII = (xHeII + _A*dtc) / (one(R) + _B*dtc)
+            end
+        end
         ttot += dtc
     end
-    return e, yHII*mh, yH2I*mh, ttot
+    return e, yHII*mh, yH2I*mh, ttot, xHeII
 end
 
 # ── GPU / batched solve path for the analytic mode ───────────────────────────
@@ -363,7 +396,7 @@ end
                                      hubble, Om, OL, fh, hexp, aoa, rtab, ctab, dtfrac, itcap)
     i = @index(Global)
     @inbounds begin
-        en, hii, h2, _ = evolve_cell_analytic(rho[i]*du, e[i]*vu2, HII[i]*du, H2I[i]*du,
+        en, hii, h2, _, _ = evolve_cell_analytic(rho[i]*du, e[i]*vu2, HII[i]*du, H2I[i]*du,
                                               dt*tu, z; hubble=hubble, Om=Om, OL=OL, fh=fh,
                                               hubble_expansion=hexp, adot_over_a=aoa,
                                               rate_tables=rtab, cool_tables=ctab,
@@ -453,7 +486,7 @@ export solve_chem_analytic_device!
         r = ifelse(r0 > T(1.0e-35), r0, T(1.0e-35))        # NaN-safe (physical CGS)
         hii_m = decode_log2sp(T, HII_u16[i]) * r           # UInt16 fraction → CGS mass density
         h2i_m = decode_log2sp(T, H2I_u16[i]) * r
-        en, hii, h2, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
+        en, hii, h2, _, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
                                               hubble=hubble, Om=Om, OL=OL, fh=fh,
                                               hubble_expansion=hexp, adot_over_a=aoa,
                                               rate_tables=rtab, cool_tables=ctab,
@@ -556,7 +589,7 @@ export solve_chem_analytic_device_u16!
                                             rate_tables=rtab, cool_tables=ctab,
                                             itcap=itcap, dtfrac=dtfrac)
         else                                               # envelope → analytic IC path
-            en, hii, h2, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
+            en, hii, h2, _, _ = evolve_cell_analytic(r, e[i]*vu2, hii_m, h2i_m, dt*tu, z;
                                             hubble=hubble, Om=Om, OL=OL, fh=fh,
                                             hubble_expansion=hexp, adot_over_a=aoa,
                                             rate_tables=rtab, cool_tables=ctab,
