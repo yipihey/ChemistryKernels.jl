@@ -252,6 +252,17 @@ iteration count, not the rate fits), so the fits remain the default.
             k14v=K.k14; k16v=K.k16; k17v=K.k17; k19v=K.k19
             k22v=K.k22; k57v=K.k57; k58v=K.k58; k27v=K.k27; k28v=K.k28
         end
+        # He ionization QSSA (recombination-era electron contribution): He recombines
+        # HeIII→HeII (z~6000) then HeII→HeI (z~2500).  Gated on Tc — HeII/HeIII → 0 once
+        # the CMB cools, so it's inert (and skipped) for the collapse.  Folding He⁺+2He²⁺
+        # into n_e drives BOTH the H recombination (Riccati source) and the Compton cooling.
+        # (Analytic-fit path; the GPU rate-table path keeps He neutral for now.)
+        if Tc > R(5000) && rate_tables === nothing
+            _sh1, _sh2 = helium_saha_pair(Tc)
+            _, nHeII, nHeIII = helium_equilibrium(_sh1, _sh2, k3(T), k4(T), k5(T), k6(T),
+                                                  yde, yHeI/R(4))
+            yde = yHII + nHeII + R(2)*nHeIII
+        end
 
         # cooling & the Compton/non-Compton split
         edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), zero(R), T, zt;
