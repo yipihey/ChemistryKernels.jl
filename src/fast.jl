@@ -261,6 +261,10 @@ iteration count, not the rate fits), so the fits remain the default.
         # ── x_HII: exact Riccati (recomb k2 vs the k57/k58/CMB ionization source) ──
         scH  = k57v*yHI*yHI + k58v*yHI*yHeI/R(4) + kb1s*yHI + k1v*yHI*yde
         yHII = _riccati(yHII, k2, scH, dtc)
+        yde  = yHII        # ADVANCE n_e = n_HII from the Riccati BEFORE forming H₂:
+                           # H⁻/H₂ formation ∝ n_e, so using the recombined end-of-step
+                           # electron density (not the stale start value) removes the
+                           # coarse-Δt H₂ over-formation at essentially zero cost.
         # ── x_H2: formation (H⁻ + H₂⁺ closed-form channels + 3-body) vs collisional
         #    dissociation, backward-Euler — unconditionally stable, still fully closed-form
         #    (one division, NO subcycle).  acH2 = k13·n_HI + k11·n_HII + k12·n_e : the
