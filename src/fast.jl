@@ -292,9 +292,23 @@ iteration count, not the rate fits), so the fits remain the default.
         nH2II = k9v*yHI*yHII / (k10v*yHI + k28v + tiny)
         nHM   = k7v*yHI*yde  / ((k8v + k15v)*yHI + (k16v + k17v)*yHII +
                                  k14v*yde + k19v*nH2II + k27v + tiny)
-        scH2  = R(2)*(k8v*nHM*yHI + k10v*nH2II*yHI + k22v*yHI*yHI*yHI)
-        acH2  = k13v*yHI + k11v*yHII + k12v*yde
-        yH2I  = (yH2I + scH2*dtc) / (one(R) + acH2*dtc)
+        # H₂ formation with EXACT n_HI depletion (Bernoulli), then dissociation as an
+        # operator-split linear sink.  Formation is nonlinear in n_HI: linear (H⁻ via
+        # k8·n_HM, H₂⁺ via k10·n_H2II) with coeff `af` + 3-body ∝ n_HI³ (k22).  With
+        # H-nuclei conservation n_HI + yH2I = C, dn_HI/dt = −2(af·n_HI + k22·n_HI³) is
+        # a Bernoulli eq; w = n_HI⁻² linearises it (w′ = 4·af·w + 4·k22), integrated
+        # EXACTLY over the substep → the fully-molecular transition (n_HI→0) is captured
+        # instead of the frozen-n_HI over-formation.  Reduces to the old formation
+        # backward-Euler at low density (af·dt≪1, k22→0).
+        af    = k8v*nHM + k10v*nH2II                     # linear formation coeff (rate = af·n_HI)
+        CH    = yHI + yH2I                               # conserved H nuclei (not in H⁺), y-conv
+        w0    = one(R) / (yHI*yHI)
+        e4a   = exp(min(R(4)*af*dtc, R(60)))             # cap → fully molecular (no overflow)
+        gfac  = af > tiny ? (e4a - one(R))/af : R(4)*dtc  # (e^{4af·dt}−1)/af  → 4·dt as af→0 (no blow-up)
+        wN    = w0*e4a + k22v*gfac                       # w(dt) = n_HI(dt)⁻²  (exact Bernoulli)
+        yH2I  = CH - one(R)/sqrt(wN)                     # H₂ formed = n_HI consumed
+        acH2  = k13v*yHI + k11v*yHII + k12v*yde          # dissociation (≈0 below ~8000 K)
+        yH2I  = yH2I / (one(R) + acH2*dtc)               # operator-split backward-Euler sink
 
         yH2I = yH2I < tiny ? tiny : (yH2I > fhd ? fhd : yH2I)
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
