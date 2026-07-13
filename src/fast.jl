@@ -271,6 +271,17 @@ iteration count, not the rate fits), so the fits remain the default.
         #    destruction the old pure-formation quadrature FROZE; it matters once the
         #    compressing core warms toward ~few×10³ K (H₂ + H → 3H), pulling f_H2 back
         #    toward its formation/dissociation balance instead of accumulating unbounded.
+        # Advance the H₂-formation rates to the POST-cooling temperature.  Rates are
+        # evaluated at the start-of-substep T, but the gas COOLED over the substep and
+        # spends its time at the lower T; k7 (H+e→H⁻) ∝ T^0.95 and k8 (H⁻+H→H₂) both
+        # drop with T, so the start-T value over-forms H₂.  Refresh T from the updated
+        # energy and re-evaluate ONLY k7,k8 (the H⁻ channel = 99.9% of formation) — this
+        # is enough to make the reduced solver's CONVERGED H₂ match the full network's
+        # bit-for-bit, at 2 rate re-evals (not the full ~13).  (Table path keeps start-T.)
+        if rate_tables === nothing
+            Ta = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde, tiny, yH2I/R(2), tiny; gamma = GAMMA_DEFAULT)
+            k7v = k7(Ta); k8v = k8(Ta)
+        end
         # H⁻ / H₂⁺ quasi-steady-state.  The H⁻ denominator now carries the FULL
         # destruction set (matching the network's equilibrium_HM): associative
         # detachment (k8+k15)·n_HI + mutual neutralization by the ionized species
