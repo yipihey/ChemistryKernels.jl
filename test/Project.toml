@@ -7,7 +7,8 @@ Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
-# EmissionKernels resolves from the VespaRegistry (or `pkg> dev` a local clone for
-# cross-package co-development); only the package-under-test is path-sourced here.
+# Keep every unregistered sibling source in the active test root. Pkg does not
+# inherit source overrides from parent or downstream projects.
 [sources]
 ChemistryKernels = {path = ".."}
+EmissionKernels = {path = "../../EmissionKernels.jl"}

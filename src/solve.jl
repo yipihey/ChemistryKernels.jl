@@ -240,6 +240,29 @@ export solve_chem_device!
     end
 end
 
+@kernel function _evolve_k_u16_primordial!(e, HII_u16, H2I_u16, HDI_u16, @Const(rho),
+                                           du, vu2, tu, dt, z, hubble, Om, OL, fh,
+                                           deut, hexp, aoa, rtab, ctab, dtfrac, itcap)
+    i = @index(Global)
+    @inbounds begin
+        T = eltype(e)
+        r = rho[i] * du
+        hii_m = decode_log2sp(T, HII_u16[i]) * r
+        h2i_m = decode_log2sp(T, H2I_u16[i]) * r
+        hd_in = deut ? decode_log2sp(T, HDI_u16[i]) * r : zero(T)
+        en, hii, h2, hd, _ = evolve_cell(r, e[i]*vu2, hii_m, h2i_m, hd_in,
+                                          dt*tu, z; hubble=hubble, Om=Om, OL=OL,
+                                          fh=fh, deuterium=deut,
+                                          hubble_expansion=hexp, adot_over_a=aoa,
+                                          rate_tables=rtab, cool_tables=ctab,
+                                          dtfrac=dtfrac, itcap=itcap)
+        e[i] = en / vu2
+        HII_u16[i] = encode_log2sp(hii / r)
+        H2I_u16[i] = encode_log2sp(h2  / r)
+        deut && (HDI_u16[i] = encode_log2sp(hd / r))
+    end
+end
+
 """
     solve_chem_u16!(rho, e_int, HII_u16, H2I_u16, [HDI_u16]; a_value, dt,
                     density_units, length_units, time_units, …,
@@ -374,13 +397,11 @@ function solve_chem_device_u16!(rho, e_int, HII_u16, H2I_u16, HDI_u16 = nothing;
     tu  = P(time_units);    z   = P(1.0 / a_value - 1.0)
     deut = deuterium && HDI_u16 !== nothing
     d_HDI_u16 = deut ? HDI_u16 : device_zeros(be, UInt16, (n,))
-    dz = device_zeros(be, P, (n,))
-    k! = workgroup_size > 0 ? _evolve_k_u16!(be, workgroup_size) : _evolve_k_u16!(be)
+    k! = workgroup_size > 0 ? _evolve_k_u16_primordial!(be, workgroup_size) : _evolve_k_u16_primordial!(be)
     k!(e_int, HII_u16, H2I_u16, d_HDI_u16, rho, du, vu2, tu,
        P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-       hubble_expansion, P(adot_over_a),
-       dz, dz, dz, dz, false, rate_tables, cool_tables,
-       dz, dz, dz, dz, dz, false, P(dtfrac), itcap; ndrange = n)
+       hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+       P(dtfrac), itcap; ndrange = n)
     KA.synchronize(be)
     return nothing
 end

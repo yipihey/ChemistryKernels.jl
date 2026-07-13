@@ -36,10 +36,10 @@ A precomputed log–log rate table: `logk` is an `(N, $(_NRT))` array of `log₁
 uniform `log₁₀T` grid, `x0 = log₁₀(Tmin)`, `invdx = 1/Δlog₁₀T`.  Device-resident (adapts
 to `CuDeviceArray`/Metal inside a kernel via `Adapt`).  Build with [`build_rate_tables`](@ref).
 """
-struct RateTables{A}
+struct RateTables{A,R}
     logk::A
-    x0::Float64
-    invdx::Float64
+    x0::R
+    invdx::R
     N::Int
 end
 Adapt.@adapt_structure RateTables
@@ -73,7 +73,7 @@ function build_rate_tables(; Tmin::Real = 1.0, Tmax::Real = 1.0e9, N::Int = 1024
         end
     end
     dev = to_device(ChemistryKernels.backend(backend), M, R)
-    return RateTables(dev, x0, 1.0 / dx, N)
+    return RateTables(dev, R(x0), R(1.0 / dx), N)
 end
 
 # One column's interpolated rate: linear in (log₁₀T, log₁₀ rate), exponentiated back.
@@ -94,10 +94,10 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
 @inline function table_rates(rt::RateTables, T, nHI, Hz, cr; deuterium::Bool = false)
     R = typeof(T)
     # locate T on the log grid (clamp to the endpoints → constant extrapolation outside)
-    s = (log10(Float64(T)) - rt.x0) * rt.invdx
-    s = clamp(s, 0.0, Float64(rt.N) - 1.0 - 1.0e-9)
+    s = (log10(T) - R(rt.x0)) * R(rt.invdx)
+    s = clamp(s, zero(R), R(rt.N) - one(R) - R(1.0e-9))
     b = unsafe_trunc(Int, s)            # 0-based bin
-    f = R(s - b)
+    f = s - R(b)
     i = b + 1                            # 1-based row of the lower node
     L = rt.logk; N = rt.N
     @inline rd(c) = _rt_lookup(L, N, i, f, c)

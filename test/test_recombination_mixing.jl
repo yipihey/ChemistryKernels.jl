@@ -61,6 +61,84 @@ include("recomb_helpers.jl")
     @test all(diff(xe_arr) .<= 3e-4)
 end
 
+@testset "zero-copy device mixing" begin
+    n = 32
+    z = 1100.0f0
+    a = 1.0f0 / (1.0f0 + z)
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho0 = nH * Float32(ChemistryKernels.MH) / 0.76f0
+    hii0 = 0.8f0 * nH * Float32(ChemistryKernels.MH)
+    e0 = Float32(e_from_T(3000.0, 0.8, Float64(rho0)))
+    rho = fill(rho0, n)
+    nsm = fill(rho0, n)
+
+    e_vec = fill(e0, n)
+    hii_vec = fill(hii0, n)
+    h2_vec = fill(1.0f-35, n)
+    solve_chem_mixing_device!(rho, e_vec, hii_vec, h2_vec, nsm;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0.8, backend=:cpu, precision=Float32)
+
+    e_scalar = fill(e0, n)
+    hii_scalar = fill(hii0, n)
+    h2_scalar = fill(1.0f-35, n)
+    solve_chem_mixing_device!(rho, e_scalar, hii_scalar, h2_scalar, rho0;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0.8, backend=:cpu, precision=Float32)
+    @test e_scalar == e_vec
+    @test hii_scalar == hii_vec
+    @test h2_scalar == h2_vec
+
+    # A neutral-H mass field must not receive the baryon hydrogen fraction twice.
+    e_neutral = fill(e0, n)
+    hii_neutral = fill(hii0, n)
+    h2_neutral = fill(1.0f-35, n)
+    solve_chem_mixing_device!(rho, e_neutral, hii_neutral, h2_neutral,
+                              fill(0.76f0 * rho0, n);
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0, smoothed_is_neutral=true,
+        backend=:cpu, precision=Float32)
+
+    e_baryon = fill(e0, n)
+    hii_baryon = fill(hii0, n)
+    h2_baryon = fill(1.0f-35, n)
+    solve_chem_mixing_device!(rho, e_baryon, hii_baryon, h2_baryon, nsm;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0, backend=:cpu, precision=Float32)
+    @test e_neutral == e_baryon
+    @test hii_neutral == hii_baryon
+    @test h2_neutral == h2_baryon
+
+    rt = build_rate_tables(; N=1024, backend=:cpu, precision=Float32)
+    e_tab = fill(e0, n)
+    hii_tab = fill(hii0, n)
+    h2_tab = fill(1.0f-35, n)
+    solve_chem_mixing_device!(rho, e_tab, hii_tab, h2_tab, nsm;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0.8, rate_tables=rt,
+        backend=:cpu, precision=Float32)
+    @test isapprox(e_tab, e_vec; rtol=2.0f-2)
+    @test isapprox(hii_tab, hii_vec; rtol=2.0f-2)
+    @test isapprox(h2_tab, h2_vec; rtol=2.0f-2)
+
+    if ChemistryKernels.has_backend(:metal)
+        be = ChemistryKernels.backend(:metal)
+        d_rho = ChemistryKernels.to_device(be, rho, Float32)
+        d_e = ChemistryKernels.to_device(be, fill(e0, n), Float32)
+        d_hii = ChemistryKernels.to_device(be, fill(hii0, n), Float32)
+        d_h2 = ChemistryKernels.to_device(be, fill(1.0f-35, n), Float32)
+        d_nsm = ChemistryKernels.to_device(be, nsm, Float32)
+        rt_metal = build_rate_tables(; N=1024, backend=:metal, precision=Float32)
+        solve_chem_mixing_device!(d_rho, d_e, d_hii, d_h2, d_nsm;
+            a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+            f_alpha=1, Xe_mean=0.8, rate_tables=rt_metal,
+            backend=:metal, precision=Float32)
+        @test isapprox(ChemistryKernels.to_host(d_e), e_tab; rtol=5.0f-4)
+        @test isapprox(ChemistryKernels.to_host(d_hii), hii_tab; rtol=5.0f-4)
+        @test isapprox(ChemistryKernels.to_host(d_h2), h2_tab; rtol=5.0f-4)
+    end
+end
+
 @testset "saha_highz" begin
     # At z≥4500 the H ionisation fraction should track Saha equilibrium to within 2%.
     # β₁s (CMB photoionisation of H(1s)) maintains detailed balance at high T, so
