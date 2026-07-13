@@ -249,6 +249,10 @@ Dust physics is enabled by `dust = true`, which requires:
         edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), nHD, T, zt;
                             nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
                             Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol)
+        # H₂ formation heating + dissociation cooling (uses the explicitly-evolved
+        # H⁻/H₂⁺; yH2II carries the 2× convention → n(H₂⁺)=yH2II/2, n(H⁻)=yHM).
+        edot += _h2_chem_heat(yHI, yHII, yde, yH2I/R(2), yHM, yH2II/R(2), R(fh)*d,
+                              K.k8, K.k10, K.k11, K.k12, K.k13, K.k22)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
             edot = zero(R)
         end

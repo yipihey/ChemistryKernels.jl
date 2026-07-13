@@ -28,6 +28,26 @@ export evolve_cell_fast, evolve_cell_analytic
     return yeq * (y0 + yeq*th) / (yeq + y0*th)
 end
 
+# H₂ formation/dissociation chemical heating (erg cm⁻³ s⁻¹; >0 heats).  Binding
+# energy is released when H₂ forms (→ gas) and absorbed when it dissociates.
+# Per-channel energies (Palla, Salpeter & Stahler 1983 / Omukai 2000): 3-body
+# 4.48 eV, H⁻ 3.53 eV, H₂⁺ 1.83 eV; collisional dissociation absorbs 4.48 eV.
+# Formation heating is SUPPRESSED below the H₂ critical density (the vibrationally-
+# excited nascent H₂ radiates the energy before collisions thermalise it — the same
+# n/(n+n_cr) that saturates the H₂ cooling to LTE); dissociation cooling is always
+# thermalised (kinetic).  This 3-body heating sets the ~1000–2000 K collapse plateau.
+const _ERG_PER_EV = 1.602176634e-12
+@inline function _h2_chem_heat(nHI::R, nHII, nde, nH2, nHM, nH2II, nH,
+                               k8, k10, k11, k12, k13, k22) where {R}
+    fform = k8  * nHM   * nHI                       # H⁻ channel   (3.53 eV)
+    gform = k10 * nH2II * nHI                       # H₂⁺ channel  (1.83 eV)
+    tform = k22 * nHI * nHI * nHI                   # 3-body       (4.48 eV)
+    diss  = (k13*nHI + k11*nHII + k12*nde) * nH2    # dissociation (4.48 eV absorbed)
+    fcr   = nH / (nH + R(1.0e8))                    # critical-density heating efficiency
+    return R(_ERG_PER_EV) *
+           (fcr*(R(3.53)*fform + R(1.83)*gform + R(4.48)*tform) - R(4.48)*diss)
+end
+
 """
     evolve_cell_fast(rho, e, HII_m, H2I_m, dt, z; hubble, Om, OL, fh,
                      hubble_expansion, adot_over_a, cool_tables, itcap, dtfrac)
@@ -236,6 +256,11 @@ iteration count, not the rate fits), so the fits remain the default.
         # cooling & the Compton/non-Compton split
         edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), zero(R), T, zt;
                             nH = fhd, cool_tables = cool_tables)
+        # H₂ formation heating + dissociation cooling (start-of-substep QSSA rates)
+        nHMh   = k7v*yHI*yde  / ((k8v+k15v)*yHI + (k16v+k17v)*yHII + k14v*yde + k27v + tiny)
+        nH2IIh = k9v*yHI*yHII / (k10v*yHI + k28v + tiny)
+        edot += _h2_chem_heat(yHI, yHII, yde, yH2I/R(2), nHMh, nH2IIh, fhd,
+                              k8v, k10v, k11v, k12v, k13v, k22v)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R); edot = zero(R); end
         edot_c    = -c1 * (T - Tc) * yde
         edot_rest = edot - edot_c
