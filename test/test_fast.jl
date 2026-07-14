@@ -79,6 +79,68 @@ let CK = ChemistryKernels,
             @test a.nH2/nH < 3e-3                               # H⁻ self-halts (no over-formation)
             @test 60 < gT(nH,a.nHII,a.nH2,a.e) < 200            # cooled to the H2 floor
         end
+
+        @testset "H recombination history z=1500→900 agrees with HyRec/RECFAST-v2" begin
+            # End-to-end H-recombination gate: integrate evolve_cell_analytic through the
+            # z≈1100 recombination epoch and check x_e against the CAMB/RECFAST-v2 fixture
+            # (calibrated to HyRec-2 to <0.2%).  The reduced rates (peebles_k2_mixing with
+            # the fudge=1.125 α_B C-factor + the Hswitch Gaussian on the Lyα K-factor +
+            # the closed H₂⁺ cycle) reproduce HyRec to <0.1% under a dedicated integrator
+            # (see recfast_v2_comparison); here the WHOLE analytic path — Riccati x_HII,
+            # analytic Compton, He fold — must reach the same history to <1% at a one-zone
+            # resolution representative of an IC-generation run.  Guards k2/fudge/gauss and
+            # the linear-source Riccati against any future shift of the recombination front.
+            #
+            # Fixture cosmology (test/fixtures/gen_recfast_v2.py): H0=71, Ωb=0.044, OL=0.73,
+            # T_CMB=2.725; x_e is H-only (He neutral for z<1500).  Seed from the fixture at
+            # z=1500 and march end-of-step to z=900 (comoving mass densities ∝(1+z)³).
+            fixture = joinpath(@__DIR__, "fixtures", "recfast_v2_xe.csv")
+            rows = [parse.(Float64, split(ln, ",")) for ln in readlines(fixture)
+                    if !isempty(ln) && !startswith(ln, "#")]
+            zref = [r[1] for r in rows]; xref = [r[2] for r in rows]; Tref = [r[3] for r in rows]
+            lerp(zq, ys) = begin
+                i = searchsortedfirst(zref, zq)
+                i <= 1 ? ys[1] : i > length(zref) ? ys[end] :
+                    ys[i-1] + (ys[i]-ys[i-1])*(zq-zref[i-1])/(zref[i]-zref[i-1])
+            end
+            nH_of(z) = FH*0.044*9.47e-30*(1+z)^3/MH      # 9.47e-30 = 1.8788e-29·0.71² [g/cm³]
+            Hz(z)    = CK.hubble_z_of(z; hubble=71.0, Om=0.27, OL=0.73)
+
+            zstart, zstop, N = 1500.0, 900.0, 800
+            lz = range(log(1+zstart), log(1+zstop); length=N+1)
+            xe0, Tg0 = lerp(zstart, xref), lerp(zstart, Tref)
+            nH  = nH_of(zstart); rho = nH*MH/FH
+            e   = (rho/MH)*(FH*(1+xe0)+(1-FH)/4)*KB*Tg0/(rho*(GAMMA-1))
+            HIIm, H2m = xe0*nH*MH, 1e-40
+            hist = Tuple{Float64,Float64}[]
+            for k in 1:N
+                zhi = exp(lz[k])-1; zlo = exp(lz[k+1])-1; zm = 0.5*(zhi+zlo)
+                Hzm = Hz(zm); dt = (zhi-zlo)/((1+zm)*Hzm)
+                nHlo = nH_of(zlo); sc = nHlo/(nH_of(zhi))   # comoving (1+z)³ dilution
+                rho = nHlo*MH/FH; HIIm *= sc; H2m *= sc
+                r = CK.evolve_cell_analytic(rho, e, HIIm, H2m, dt, zlo;
+                        hubble=71.0, Om=0.27, OL=0.73, fh=FH,
+                        hubble_expansion=true, adot_over_a=Hzm)
+                e, HIIm, H2m = r[1], r[2], r[3]
+                push!(hist, (zlo, (HIIm/MH)/nHlo))
+            end
+            zc = [z for (z,_) in hist]; xc = [x for (_,x) in hist]
+            xe_at(z) = xc[argmin(abs.(zc .- z))]
+
+            # Core recombination epoch (the x_e "knee") — agree with HyRec to <1%.
+            for z in (1000.0, 1050.0, 1100.0)
+                err = abs(xe_at(z) - lerp(z, xref)) / lerp(z, xref)
+                @test err < 0.01
+            end
+            # Whole window (steep pre-knee to freeze-out shoulder) — <1.5%.
+            for z in (900.0, 950.0, 1200.0, 1300.0)
+                err = abs(xe_at(z) - lerp(z, xref)) / lerp(z, xref)
+                @test err < 0.015
+            end
+            # Monotone recombination (x_e strictly falling through the epoch — no bounce
+            # from the linear-source Riccati; the old frozen-source form oscillated here).
+            @test all(diff(xc) .< 0)
+        end
     end
 
     @testset "warm-gas H2 rates finite & positive (GPU fast-pow guard)" begin
