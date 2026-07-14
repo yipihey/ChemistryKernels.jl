@@ -391,8 +391,27 @@ iteration count, not the rate fits), so the fits remain the default.
                 _r1 = _she1/_neh2; _r2 = _she2/_neh2
                 xHeII = fHe * _r1 / (one(R) + _r1 + _r1*_r2)
             else
-                _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, yHI/nH_h, xHeII, fHe)
-                xHeII = (xHeII + _A*dtc) / (one(R) + _B*dtc)
+                # He⁺ freeze-out: HyRec-2 He I rate, backward-Euler.  The rate's H-
+                # continuum enhancement — the term that COMPLETES He recombination — is
+                # ∝ 1/xH1 (neutral H).  At z≳1600 H is Saha-pinned to the CMB and barely
+                # recombining (xH1 ~ 1e-8), but the reduced H Riccati is only marginally
+                # damped up here and OSCILLATES step-to-step (spurious xH1 spikes up to
+                # ~0.2, i.e. 10⁷× the true value), which over-enhances the He escape and
+                # recombines He⁺ too fast — the z≈2000-3000 seam (−2 to −4% vs RECFAST).
+                # Feed the He rate the SMOOTH H Saha neutral fraction instead:
+                #   n_HI/n_H = x_HII·x_e·n_H / S_H,  S_H = n_Q·e^{−χ_H/T_cmb}.
+                # This is exact where H is in radiative equilibrium (the whole He era) and
+                # costs one exp — the H-He-electron coupling the full network gets from its
+                # n_e-consistent charge balance, without reinventing the network.  Below
+                # z≈1600 (H freeze-out, the fudge epoch) H leaves Saha ⇒ real neutral frac.
+                if zt > R(1600)
+                    _SH  = (R(_REC_CR)*Tc)^R(1.5) * R(1.0e-6) * exp(-R(_CHI_H_K)/Tc)
+                    _xh1 = min(max(yHII*yde/(nH_h*_SH), R(1.0e-12)), one(R))
+                else
+                    _xh1 = yHI/nH_h
+                end
+                _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, _xh1, xHeII, fHe)
+                xHeII  = (xHeII + _A*dtc) / (one(R) + _B*dtc)
             end
         end
         ttot += dtc
