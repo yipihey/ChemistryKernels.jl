@@ -28,6 +28,28 @@ export evolve_cell_fast, evolve_cell_analytic
     return yeq * (y0 + yeq*th) / (yeq + y0*th)
 end
 
+# Linear-source Riccati:  dy/dt = q + p·(C − y) − k2·y²  (exact over the whole step).
+# The photoionisation / collisional-e ionisation source is LINEAR in the neutral
+# fraction (kb1s·n_HI + k1·n_e·n_HI), so with H-nuclei conservation n_HI = C − y it is
+# a −p·y depletion, NOT a frozen constant.  Freezing it (the plain `_riccati` above,
+# which lumps kb1s·n_HI into scH at the start-of-substep n_HI and then drives y all the
+# way to √(scH/k2)) OVERSHOOTS at high z where the source is strong and the step is
+# large (cooling-limited): y bounces, i.e. the spurious x_HII step-to-step oscillation
+# at z≳1600 where H is Saha-pinned to the CMB.  Treating the linear term implicitly
+# removes the overshoot — the equilibrium is the true radiative-balance (Saha/Peebles)
+# ionisation, reached monotonically.  `q` keeps the genuinely-nonlinear collisional
+# floor (k57·n_HI² + k58·…) frozen (∝n_HI², negligible at high z, ~constant at collapse
+# where n_HI≈C).  Reduces to `_riccati(scH=q)` when p→0 (the cold collapse regime).
+@inline function _riccati2(y0::R, k2::R, p::R, q::R, C::R, dt::R) where {R}
+    d = q + p*C                                            # dy/dt = d − p·y − k2·y²
+    (p <= zero(R) && q <= zero(R)) && return y0 / (one(R) + k2*y0*dt)   # pure recomb
+    Δ   = sqrt(p*p + R(4)*k2*d)
+    yeq = (Δ - p) / (R(2)*k2)                              # positive equilibrium root
+    ym  = -(Δ + p) / (R(2)*k2)                             # negative root (< 0)
+    E   = exp(-min(Δ*dt, R(60)))                           # e^{−Δ·dt}, Δ = k2·(yeq−ym)
+    return (yeq*(y0 - ym) - ym*(y0 - yeq)*E) / ((y0 - ym) - (y0 - yeq)*E)
+end
+
 # H₂ formation/dissociation chemical heating (erg cm⁻³ s⁻¹; >0 heats).  Binding
 # energy is released when H₂ forms (→ gas) and absorbed when it dissociates.
 # Per-channel energies (Palla, Salpeter & Stahler 1983 / Omukai 2000): 3-body
@@ -283,9 +305,27 @@ iteration count, not the rate fits), so the fits remain the default.
         # Both inert for the collapse (He neutral) — the analytic-fit path only for now.
         if track_He
             _shh1, _shh2 = helium_saha_pair(Tc)
-            _neh    = max(yHII, tiny)
-            _xHeIII = xHeII * _shh2 / _neh
-            yde     = yHII + (xHeII + R(2)*_xHeIII) * nH_h
+            if zt > R(4500)
+                # He fully in Saha equilibrium and He²⁺ is the MAJORITY — reconstructing
+                # it from the tiny He⁺ (n_HeIII = n_HeII·s2/n_e) amplifies any error and
+                # (with n_e ≈ n_HII, missing the 2·He²⁺ electrons) overshot n_HeIII past
+                # n_He.  Solve the 3-level He + n_e balance self-consistently instead (a
+                # few fixed points; He is a small perturbation on n_e ⇒ fast) — the exact
+                # Saha x_e, and it re-anchors the carried He⁺ to equilibrium each step.
+                _neh = max(yHII + xHeII*nH_h, tiny)
+                for _ in 1:4
+                    _r1 = _shh1/_neh; _r2 = _shh2/_neh; _den = one(R) + _r1 + _r1*_r2
+                    _neh = yHII + fHe*(_r1 + R(2)*_r1*_r2)/_den * nH_h
+                end
+                _r1 = _shh1/_neh; _r2 = _shh2/_neh; _den = one(R) + _r1 + _r1*_r2
+                xHeII = fHe*_r1/_den
+                yde   = _neh
+            else
+                # He²⁺ negligible (z≲4500): carried He⁺ + its (tiny) He²⁺ Saha tail.
+                _neh    = max(yHII + xHeII*nH_h, tiny)
+                _xHeIII = xHeII * _shh2 / _neh
+                yde     = yHII + (xHeII + R(2)*_xHeIII) * nH_h
+            end
         elseif Tc > R(5000) && rate_tables === nothing
             _shh1, _shh2 = helium_saha_pair(Tc)
             _, nHeII, nHeIII = helium_equilibrium(_shh1, _shh2, k3(T), k4(T), k5(T), k6(T),
@@ -323,9 +363,15 @@ iteration count, not the rate fits), so the fits remain the default.
         e   = e + (e*(Tc/T) - e)*ex + de_rest*g     # exact for de/dt = −Kc(e−e_cmb) + de_rest
         e   = max(e, tiny)
 
-        # ── x_HII: exact Riccati (recomb k2 vs the k57/k58/CMB ionization source) ──
-        scH  = k57v*yHI*yHI + k58v*yHI*yHeI/R(4) + kb1s*yHI + k1v*yHI*yde
-        yHII = _riccati(yHII, k2, scH, dtc)
+        # ── x_HII: linear-source Riccati (recomb k2 vs the CMB photo-ion + collisional
+        #    source).  The photoionisation kb1s·n_HI and collisional-e k1·n_e·n_HI are
+        #    LINEAR in n_HI = C − y ⇒ carried as the implicit −p·y depletion (p = kb1s +
+        #    k1·n_e); this removes the frozen-source overshoot that made x_HII oscillate
+        #    step-to-step at z≳1600 (H Saha-pinned).  The genuinely-nonlinear collisional
+        #    floor k57·n_HI² + k58·n_HI·n_HeI stays frozen in q.  C = n_HI + n_HII. ──
+        pion = kb1s + k1v*yde
+        qion = k57v*yHI*yHI + k58v*yHI*yHeI/R(4)
+        yHII = _riccati2(yHII, k2, pion, qion, yHI + yHII, dtc)
         yde  = yHII        # ADVANCE n_e = n_HII from the Riccati BEFORE forming H₂:
                            # H⁻/H₂ formation ∝ n_e, so using the recombined end-of-step
                            # electron density (not the stale start value) removes the
@@ -379,40 +425,32 @@ iteration count, not the rate fits), so the fits remain the default.
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
         yHI  = max(fhd - yHII - yH2I, tiny)
         yde  = yHII
-        # advance He⁺ over the substep: 3-level Saha only above z≈4500 (where He²⁺ is
-        # non-negligible and the HyRec He I rate — which assumes He²⁺≈0 — does not apply);
-        # below that use the HyRec-2 He I rate (backward-Euler) all the way, so it captures
-        # the slow z≈2000-2500 He⁺→He⁰ freeze-out (semi-forbidden 2³P / 2¹P-escape) WITHOUT
-        # a hard Saha→rate switch at z=3000 that left a few-% seam in the transition region.
-        if track_He
-            _she1, _she2 = helium_saha_pair(Tc)
-            _neh2 = max(yHII + xHeII*nH_h, tiny)
-            if zt > R(4500)
-                _r1 = _she1/_neh2; _r2 = _she2/_neh2
-                xHeII = fHe * _r1 / (one(R) + _r1 + _r1*_r2)
+        # advance He⁺ over the substep.  Above z≈4500 He²⁺ is non-negligible and He is in
+        # Saha equilibrium — that is solved self-consistently in the START-of-substep fold
+        # (xHeII already re-anchored to equilibrium there), so nothing to do at the end.
+        # Below z≈4500 (He²⁺≈0) He⁺→He⁰ freezes out ⇒ evolve xHeII with the HyRec-2 He I
+        # rate (backward-Euler), which captures the slow z≈2000-2500 freeze-out (semi-
+        # forbidden 2³P / 2¹P-escape) with no hard Saha→rate seam in the transition region.
+        if track_He && zt <= R(4500)
+            # He⁺ freeze-out: HyRec-2 He I rate, backward-Euler.  The rate's H-continuum
+            # enhancement — the term that COMPLETES He recombination — is ∝ 1/xH1 (neutral
+            # H).  At z≳1600 H is Saha-pinned to the CMB and barely recombining (xH1 ~ 1e-8),
+            # but the reduced H Riccati, though now monotone (linear-source form), still
+            # carries round-off there; the He completion is exquisitely sensitive to it.
+            # Feed the He rate the SMOOTH H Saha neutral fraction instead:
+            #   n_HI/n_H = x_HII·x_e·n_H / S_H,  S_H = n_Q·e^{−χ_H/T_cmb}.
+            # This is exact where H is in radiative equilibrium (the whole He era) and
+            # costs one exp — the H-He-electron coupling the full network gets from its
+            # n_e-consistent charge balance, without reinventing the network.  Below
+            # z≈1600 (H freeze-out, the fudge epoch) H leaves Saha ⇒ real neutral frac.
+            if zt > R(1600)
+                _SH  = (R(_REC_CR)*Tc)^R(1.5) * R(1.0e-6) * exp(-R(_CHI_H_K)/Tc)
+                _xh1 = min(max(yHII*yde/(nH_h*_SH), R(1.0e-12)), one(R))
             else
-                # He⁺ freeze-out: HyRec-2 He I rate, backward-Euler.  The rate's H-
-                # continuum enhancement — the term that COMPLETES He recombination — is
-                # ∝ 1/xH1 (neutral H).  At z≳1600 H is Saha-pinned to the CMB and barely
-                # recombining (xH1 ~ 1e-8), but the reduced H Riccati is only marginally
-                # damped up here and OSCILLATES step-to-step (spurious xH1 spikes up to
-                # ~0.2, i.e. 10⁷× the true value), which over-enhances the He escape and
-                # recombines He⁺ too fast — the z≈2000-3000 seam (−2 to −4% vs RECFAST).
-                # Feed the He rate the SMOOTH H Saha neutral fraction instead:
-                #   n_HI/n_H = x_HII·x_e·n_H / S_H,  S_H = n_Q·e^{−χ_H/T_cmb}.
-                # This is exact where H is in radiative equilibrium (the whole He era) and
-                # costs one exp — the H-He-electron coupling the full network gets from its
-                # n_e-consistent charge balance, without reinventing the network.  Below
-                # z≈1600 (H freeze-out, the fudge epoch) H leaves Saha ⇒ real neutral frac.
-                if zt > R(1600)
-                    _SH  = (R(_REC_CR)*Tc)^R(1.5) * R(1.0e-6) * exp(-R(_CHI_H_K)/Tc)
-                    _xh1 = min(max(yHII*yde/(nH_h*_SH), R(1.0e-12)), one(R))
-                else
-                    _xh1 = yHI/nH_h
-                end
-                _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, _xh1, xHeII, fHe)
-                xHeII  = (xHeII + _A*dtc) / (one(R) + _B*dtc)
+                _xh1 = yHI/nH_h
             end
+            _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, _xh1, xHeII, fHe)
+            xHeII  = (xHeII + _A*dtc) / (one(R) + _B*dtc)
         end
         ttot += dtc
     end
