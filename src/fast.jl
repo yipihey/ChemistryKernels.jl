@@ -44,6 +44,14 @@ end
     d = q + p*C                                            # dy/dt = d − p·y − k2·y²
     (p <= zero(R) && q <= zero(R)) && return y0 / (one(R) + k2*y0*dt)   # pure recomb
     Δ   = sqrt(p*p + R(4)*k2*d)
+    # f32 underflow guard: tiny-positive p (e.g. k1·n_e at T→1 K, ~1e-36) slips
+    # past the pure-recomb branch while BOTH p² and 4·k2·d underflow to 0 →
+    # Δ = 0 → degenerate roots (yeq == ym) → the two-root form is 0/0 = NaN.
+    # More generally, when Δ is below the f32 CANCELLATION scale of the root
+    # separation in the denominator (yeq−ym = Δ/k2 vs y0), the source is
+    # dynamically negligible over any dt — pure recombination is the correct
+    # limit (drift d·dt is O(Δ²/4k2)·dt, beyond f32 resolution of y0).
+    Δ <= R(8)*eps(R)*k2*y0 && return y0 / (one(R) + k2*y0*dt)
     yeq = (Δ - p) / (R(2)*k2)                              # positive equilibrium root
     ym  = -(Δ + p) / (R(2)*k2)                             # negative root (< 0)
     E   = exp(-min(Δ*dt, R(60)))                           # e^{−Δ·dt}, Δ = k2·(yeq−ym)
