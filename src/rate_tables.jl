@@ -69,7 +69,15 @@ function build_rate_tables(; Tmin::Real = 1.0, Tmax::Real = 1.0e9, N::Int = 1024
                 k16(Tj), k17(Tj), k18(Tj), k19(Tj), k22(Tj), k57(Tj), k58(Tj),
                 k50(Tj), k51(Tj), k52(Tj), k53(Tj), k54(Tj), k55(Tj), k56(Tj))
         @inbounds for c in 1:_NRT
-            M[j, c] = log10(max(vals[c], R(1.0e-300)))   # all rates > 0 (floored at tiny)
+            # all rates > 0, floored at the smallest normal of the TABLE
+            # precision: R(1e-300) UNDERFLOWS TO ZERO at Float32 → log10(0) =
+            # -Inf entries → the lookup's f32-rounded f = 1.0 makes
+            # (-Inf)·(1−f) = NaN (the fits saturate benignly; only tables hit
+            # this).  floatmin(R) keeps the floor finite at every precision
+            # (f32: 10^-37.9, f64: 10^-307.6); nonfinite fit values (f32
+            # under/overflow inside a fit at grid-edge T) also floor.
+            v = vals[c]
+            M[j, c] = log10(isfinite(v) && v > 0 ? max(v, floatmin(R)) : floatmin(R))
         end
     end
     dev = to_device(ChemistryKernels.backend(backend), M, R)
