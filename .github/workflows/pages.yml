@@ -35,7 +35,7 @@ jobs:
       - name: Add Julia registries
         run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
       - name: Instantiate Julia environment
-        run: julia --project=test -e 'using Pkg; Pkg.develop(path="EmissionKernels.jl"); Pkg.instantiate()'
+        run: julia --project=test -e 'using Pkg; Pkg.develop([Pkg.PackageSpec(path="."), Pkg.PackageSpec(path="EmissionKernels.jl")]); Pkg.instantiate()'
       - name: Install site dependencies
         working-directory: docs-site
         run: npm ci
