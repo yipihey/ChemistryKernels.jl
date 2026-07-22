@@ -17,6 +17,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: yipihey/EmissionKernels.jl
+          ref: 3a5ef750c72c33d32a24dfe6b0ab8b14f36ecda5
           path: EmissionKernels.jl
       - uses: julia-actions/setup-julia@v2
         with:
@@ -40,6 +41,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: yipihey/EmissionKernels.jl
+          ref: 3a5ef750c72c33d32a24dfe6b0ab8b14f36ecda5
           path: EmissionKernels.jl
       - uses: julia-actions/setup-julia@v2
         with:
