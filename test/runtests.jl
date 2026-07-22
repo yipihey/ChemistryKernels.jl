@@ -35,11 +35,7 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     # ── table-free suites (always; the Linux/CI gate) ────────────────────────
     include("test_rates_cmb.jl")
     include("test_equilibrium.jl")
-    # NOTE: test_network_step.jl is temporarily disabled — its hand-written reference
-    # predates the recombination/He additions to `network_step` (she1/she2 He-Saha
-    # factors, k_beta1s CMB photoionisation, the k28 H₂⁺ closure) and needs updating to
-    # the current rate NamedTuple + formulas. Re-enable after refreshing it.
-    # include("test_network_step.jl")
+    include("test_network_step.jl")
     include("test_driver.jl")
     include("test_onezone.jl")
     include("test_recombination_mixing.jl")

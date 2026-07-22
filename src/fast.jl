@@ -50,6 +50,34 @@ end
     return (yeq*(y0 - ym) - ym*(y0 - yeq)*E) / ((y0 - ym) - (y0 - yeq)*E)
 end
 
+# Exact solution of dy/dt = source - loss*y - k2*y^2, written to remain
+# well-conditioned in Float32 when the positive equilibrium root is tiny.
+# Used by the analytic Ly-alpha-mixing path, whose photoionisation term is
+# naturally expressed as a constant source plus a linear neutral depletion.
+@inline function _riccati_linear(y0::R, k2::R, loss::R, source::R, dt::R) where {R}
+    if source <= zero(R) && loss <= zero(R)
+        return _riccati(y0, k2, source, dt)
+    end
+    if k2 <= zero(R)
+        if loss <= zero(R)
+            return max(y0 + source*dt, zero(R))
+        end
+        yeq = source / loss
+        return max(yeq + (y0 - yeq)*exp(-loss*dt), zero(R))
+    end
+    b = max(loss, zero(R))
+    c = max(source, zero(R))
+    disc = sqrt(max(b*b + R(4)*k2*c, zero(R)))
+    disc <= zero(R) && return y0
+    yp = c > zero(R) ? (R(2)*c) / (b + disc) : zero(R)
+    ym = (-b - disc) / (R(2)*k2)
+    delta = -expm1(-min(disc*dt, R(80)))
+    num = y0*disc + (k2*y0*ym + c)*delta
+    den = disc + k2*(y0 - yp)*delta
+    den > zero(R) || return max(yp, zero(R))
+    return max(num / den, zero(R))
+end
+
 # H₂ formation/dissociation chemical heating (erg cm⁻³ s⁻¹; >0 heats).  Binding
 # energy is released when H₂ forms (→ gas) and absorbed when it dissociates.
 # Per-channel energies (Palla, Salpeter & Stahler 1983 / Omukai 2000): 3-body

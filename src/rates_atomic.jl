@@ -102,6 +102,7 @@ end
 # it, electrons recombine away (case-B, fast) and H⁻ formation self-halts (correct).
 @inline function k57(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     @fastmath return R(1.2e-17) * T^R(1.2) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k57
@@ -111,6 +112,7 @@ end
 # Boltzmann-suppressed → ~0 below ~5000 K; NO low-T floor (see k57).
 @inline function k58(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     @fastmath return R(1.75e-17) * T^R(1.3) * exp(-R(1.578e5) / T)
 end
 @scalarkernel k58

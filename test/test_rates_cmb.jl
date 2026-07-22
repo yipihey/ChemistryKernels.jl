@@ -6,7 +6,7 @@ include(joinpath(@__DIR__, "harness.jl"))
 # coefficients comp1_cmb/comp2_cmb/COMPA now live in the EmissionKernels dependency.
 module UnitCMB
   using ChemistryKernels, KernelAbstractions
-  using ChemistryKernels: MH, TINY, TEV_PER_K
+  using ChemistryKernels: MH, TEV_PER_K
   include(joinpath(@__DIR__, "..", "src", "rates_cmb.jl"))
 end
 

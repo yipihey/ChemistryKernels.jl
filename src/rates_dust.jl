@@ -24,6 +24,7 @@ export k_H2_dust, k_gr_recomb_HII
 # Scaled by Z_rel = Z/Z_☉ (dust-to-gas ratio proportional to metallicity).
 @inline function k_H2_dust(T_gas::Real, T_dust::Real, Z_rel::Real)
     R = typeof(T_gas)
+    (T_gas > zero(R) && Z_rel > zero(R)) || return zero(R)
     # Sticking coefficient: atoms bounce off hot grains (Hollenbach & McKee 1979)
     S = inv(one(R) + (T_gas / R(464))^2)
     # Surface recombination efficiency: physisorption sites populated when T_dust ≲ 30 K
@@ -40,7 +41,10 @@ end
 # over 100–10^4 K); clamped at ψ_max to prevent overflow in strong-field regions.
 @inline function k_gr_recomb_HII(T_gas::Real, G0::Real, Z_rel::Real, n_e::Real)
     R = typeof(T_gas)
-    ψ     = G0 * sqrt(T_gas) / max(n_e, R(1e-20))
+    Z_rel > zero(R) || return zero(R)
+    G0 <= zero(R) && return R(1.225e-13) * Z_rel
+    (T_gas > zero(R) && n_e > zero(R)) || return zero(R)
+    ψ     = G0 * sqrt(T_gas) / n_e
     psi_c = min(ψ, R(1e8))
     return R(1.225e-13) * Z_rel / (one(R) + R(8.074e-6) * psi_c^R(1.378))
 end

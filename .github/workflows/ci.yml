@@ -25,3 +25,33 @@ jobs:
         run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
       - name: Run tests (table-free suites; grackle-oracle suites are macOS-gated)
         run: julia --project=test test/runtests.jl
+
+  documentation:
+    name: Science data and HTML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - name: Add registries
+        run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
+      - name: Instantiate Julia test environment
+        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+      - name: Install site dependencies
+        working-directory: docs-site
+        run: npm ci
+      - name: Regenerate figures from package formulas
+        working-directory: docs-site
+        run: npm run generate:science
+      - name: Require committed figures to be current
+        run: git diff --exit-code -- docs-site/app/science-data.ts
+      - name: Build and verify rendered HTML
+        working-directory: docs-site
+        run: npm test

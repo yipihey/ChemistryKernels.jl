@@ -4,7 +4,7 @@ include(joinpath(@__DIR__, "oracle.jl")); using .ChemOracle
 include(joinpath(@__DIR__, "harness.jl"))
 module UnitDeut
   using ChemistryKernels, KernelAbstractions
-  using ChemistryKernels: MH, TINY, TEV_PER_K
+  using ChemistryKernels: MH, TEV_PER_K
   include(joinpath(@__DIR__, "..", "src", "rates_deuterium.jl"))
 end
 ChemOracle.set_flags!(); Ts = ChemOracle.tgrid()

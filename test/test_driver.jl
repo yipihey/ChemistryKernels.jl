@@ -19,6 +19,25 @@ using ChemistryKernels: peebles_k2, hubble_z_of, evolve_cell, solve_chem!
     @test peebles_k2(T, nHI, Hz) < aB*1e6
 end
 
+@testset "solve_chem! Metal dust+metals smoke" begin
+    if ChemistryKernels.has_backend(:metal)
+        n = 4
+        rho = fill(1f0, n); e = fill(1f-7, n)
+        HII = fill(7.6f-3, n); H2I = fill(7.6f-5, n)
+        metals = (C=fill(2.69f-4, n), O=fill(4.90f-4, n),
+                  Si=fill(3.24f-5, n), Fe=fill(3.16f-5, n))
+        solve_chem!(rho, e, HII, H2I;
+            a_value=1/11, dt=1f-4, density_units=1f-24,
+            length_units=3f24, time_units=3f15,
+            metals=metals, dust=true, Z_rel=fill(1f-3, n),
+            G0=fill(1f0, n), A_V=zeros(Float32, n),
+            N_H=fill(1f18, n), N_H2=fill(1f14, n),
+            backend=:metal, precision=Float32)
+        @test all(isfinite, e) && all(>(0), e)
+        @test all(isfinite, HII) && all(x -> 0 <= x <= 0.76f0, HII)
+    end
+end
+
 @testset "evolve_cell physical sanity" begin
     fh = 0.76; rho = 1.0e-25
     HII = 1e-4*fh*rho; H2I = 1e-6*fh*rho

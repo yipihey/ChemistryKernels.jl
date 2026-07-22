@@ -44,6 +44,8 @@ end
     @test Gamma_PE(1e4, 2.0, 1.0, 1.0) > Gamma_PE(1e4, 1.0, 1.0, 1.0)
     # Float32
     @test Gamma_PE(1f4, 1f0, 1f0, 1f0) isa Float32
+    # Positive radiation with no electrons is the exact high-charging limit.
+    @test Gamma_PE(1e4, 1.0, 1.0, 0.0) == 0.0
 end
 
 @testset "Lambda_gr" begin
@@ -72,6 +74,8 @@ end
     @test k_gr_recomb_HII(8000.0, 1.0, 2.0, 1.0) ≈ 2 * k_gr_recomb_HII(8000.0, 1.0, 1.0, 1.0)
     # Float32
     @test k_gr_recomb_HII(8000f0, 1f0, 1f0, 1f0) isa Float32
+    @test k_gr_recomb_HII(8000.0, 1.0, 1.0, 0.0) == 0.0
+    @test k_gr_recomb_HII(8000.0, 0.0, 1.0, 0.0) == 1.225e-13
 end
 
 @testset "Lambda_dust" begin
@@ -172,7 +176,7 @@ end
     yHII  = 0.1 * nH
     yde   = yHII
     yH2I  = 1e-3 * nH  # trace H₂
-    yHM   = 1e-20; yH2II = 1e-20
+    yHM   = 0.0; yH2II = 0.0
     yDI   = 0.0; yDII = 0.0; yHDI = 0.0
     dt    = 1e10   # 300 yr sub-step
 

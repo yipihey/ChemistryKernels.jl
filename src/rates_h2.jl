@@ -8,8 +8,6 @@
 #   three_body_rate         = 0  (Abel et al.)
 #
 # Every numeric literal is wrapped in R(...) so the math is fully generic in T.
-# `TINY` is imported from ChemistryKernels (= 1e-20).
-#
 # GPU-SAFETY: the Anninos-style fits (k9, k11, k14, k15) are exp(polynomial in lnT).
 # Their powers of `lnT` MUST be written as INTEGER LITERALS (`lTev^2`, not `lTev^R(2)`).
 # An integer literal lowers to `Base.power_by_squaring` (repeated ×), which is exact for a
@@ -86,7 +84,7 @@ end
                    + R(3.5311932e-13)  * lT^7)
         end
     else
-        return R(TINY)
+        return zero(R)
     end
 end
 @scalarkernel k11
@@ -99,7 +97,7 @@ end
     if Tev > R(0.3)
         @fastmath return R(4.4886e-9) * T^R(0.109127) * exp(-R(101858.0) / T)
     else
-        return R(TINY)
+        return zero(R)
     end
 end
 @scalarkernel k12
@@ -113,7 +111,7 @@ end
         @fastmath return R(1.0670825e-10) * Tev^R(2.012) /
                (exp(R(4.463) / Tev) * (R(1.0) + R(0.2472) * Tev)^R(3.512))
     else
-        return R(TINY)
+        return zero(R)
     end
 end
 @scalarkernel k13
@@ -137,7 +135,7 @@ end
                      - R(2.631285809207e-6)  * lTev^8)
         end
     else
-        return R(TINY)
+        return zero(R)
     end
 end
 @scalarkernel k14

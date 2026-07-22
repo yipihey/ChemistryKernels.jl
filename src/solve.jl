@@ -9,7 +9,7 @@ export solve_chem!
 # Per-cell: convert code units → CGS, evolve, convert back. Keeps fields in place.
 @kernel function _evolve_k!(e, HII, H2I, HDI, @Const(rho),
                             du, vu2, tu, dt, z, hubble, Om, OL, fh, deut, hexp, aoa,
-                            @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals, rtab, ctab,
+                            @Const(aMetals), hasmetals, rtab, ctab,
                             @Const(aZrel), @Const(aG0), @Const(aAV),
                             @Const(aNH), @Const(aNH2), hasdust, dtfrac, itcap)
     i = @index(Global)
@@ -19,7 +19,8 @@ export solve_chem!
         # metals: per-cell number abundances n(X)/n_H (dimensionless, no unit conv).
         # Always a concrete MetalAbundances{T}; zeros (hasmetals=false) ⇒ the metal
         # term short-circuits to exactly 0 (bit-identical, zero-cost).
-        mab = hasmetals ? MetalAbundances{T}(aC[i], aO[i], aSi[i], aFe[i]) :
+        mab = hasmetals ? MetalAbundances{T}(aMetals[i, 1], aMetals[i, 2],
+                                             aMetals[i, 3], aMetals[i, 4]) :
                           MetalAbundances{T}()
         # dust: per-cell physical parameters (dimensionless / CGS column densities).
         # zeros (hasdust=false) → dust=false branch inside evolve_cell, zero-cost.
@@ -40,6 +41,52 @@ export solve_chem!
         HII[i] = hii / du
         H2I[i] = h2  / du
         deut && (HDI[i] = hd / du)
+    end
+end
+
+# The primordial path is deliberately a separate kernel, not merely the full
+# kernel with false flags.  Besides avoiding unused abundance buffers, this
+# keeps the generated GPU program small enough for Apple's Metal compiler and
+# removes optional dust/metal branches from the overwhelmingly common case.
+@kernel function _evolve_k_primordial!(e, HII, H2I, HDI, @Const(rho),
+                                       du, vu2, tu, dt, z, hubble, Om, OL, fh,
+                                       deut, hexp, aoa, rtab, ctab, dtfrac, itcap)
+    i = @index(Global)
+    @inbounds begin
+        T = eltype(e)
+        hd_in = deut ? HDI[i] * du : zero(T)
+        en, hii, h2, hd, _ = evolve_cell(rho[i] * du, e[i] * vu2,
+                                          HII[i] * du, H2I[i] * du, hd_in,
+                                          dt * tu, z; hubble=hubble, Om=Om, OL=OL,
+                                          fh=fh, deuterium=deut,
+                                          hubble_expansion=hexp, adot_over_a=aoa,
+                                          rate_tables=rtab, cool_tables=ctab,
+                                          dtfrac=dtfrac, itcap=itcap)
+        e[i]   = en  / vu2
+        HII[i] = hii / du
+        H2I[i] = h2  / du
+        deut && (HDI[i] = hd / du)
+    end
+end
+
+# Two-species production kernel.  Passing `deuterium=false` as a literal lets
+# GPU compilers eliminate the complete D/HD reaction network instead of
+# retaining both sides of a runtime Boolean branch.
+@kernel function _evolve_k_reduced!(e, HII, H2I, @Const(rho),
+                                    du, vu2, tu, dt, z, hubble, Om, OL, fh,
+                                    hexp, aoa, rtab, ctab, dtfrac, itcap)
+    i = @index(Global)
+    @inbounds begin
+        en, hii, h2, _, _ = evolve_cell(rho[i] * du, e[i] * vu2,
+                                         HII[i] * du, H2I[i] * du, zero(eltype(e)),
+                                         dt * tu, z; hubble=hubble, Om=Om, OL=OL,
+                                         fh=fh, deuterium=false,
+                                         hubble_expansion=hexp, adot_over_a=aoa,
+                                         rate_tables=rtab, cool_tables=ctab,
+                                         dtfrac=dtfrac, itcap=itcap)
+        e[i]   = en  / vu2
+        HII[i] = hii / du
+        H2I[i] = h2  / du
     end
 end
 
@@ -69,6 +116,10 @@ network's mass-equivalent convention) in the host code units defined by
 - `workgroup_size` : GPU threads per workgroup (0 = let KernelAbstractions choose the
                     backend default, typically 256).  Try 128 or 512 on A6000/H100 when
                     register pressure or occupancy is the bottleneck.
+
+On Metal, omitted rate/cooling tables are built once, cached on the device, and reused
+automatically. CPU calls remain analytic by default. Supplying either table explicitly
+always overrides the backend default.
 
 **Recommended production-mode call on CUDA:**
 ```julia
@@ -105,6 +156,7 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
 
     P   = precision
     be  = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
     du  = P(density_units)
     vu2 = P((length_units / time_units)^2)
     tu  = P(time_units)
@@ -116,10 +168,17 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
         @assert length(metals.C)==n && length(metals.O)==n &&
                 length(metals.Si)==n && length(metals.Fe)==n
     end
-    d_aC = hasmetals ? to_device(be, collect(metals.C),  P) : device_zeros(be, P, (n,))
-    d_aO = hasmetals ? to_device(be, collect(metals.O),  P) : device_zeros(be, P, (n,))
-    d_aSi= hasmetals ? to_device(be, collect(metals.Si), P) : device_zeros(be, P, (n,))
-    d_aFe= hasmetals ? to_device(be, collect(metals.Fe), P) : device_zeros(be, P, (n,))
+    # One n×4 buffer avoids four separate GPU buffer bindings.  This matters on
+    # Apple GPUs, whose indirect argument-buffer limit is 31 resources: the full
+    # metals+dust kernel otherwise requires 32 even when those paths are disabled.
+    h_metals = zeros(P, n, 4)
+    if hasmetals
+        h_metals[:, 1] .= metals.C
+        h_metals[:, 2] .= metals.O
+        h_metals[:, 3] .= metals.Si
+        h_metals[:, 4] .= metals.Fe
+    end
+    d_metals = to_device(be, h_metals, P)
 
     # dust: optional per-cell physical parameters. When dust=false, zero pads are
     # uploaded but the hasdust=false flag prevents any use inside the kernel.
@@ -142,12 +201,26 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
     d_H2I = to_device(be, collect(H2I),   P)
     d_HDI = deut ? to_device(be, collect(HDI), P) : device_zeros(be, P, (n,))
 
-    k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
-    k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
-       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-       hubble_expansion, P(adot_over_a),
-       d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
-       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
+    if !deut && !hasmetals && !hasdust
+        k! = workgroup_size > 0 ? _evolve_k_reduced!(be, workgroup_size) : _evolve_k_reduced!(be)
+        k!(d_e, d_HII, d_H2I, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh),
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    elseif !hasmetals && !hasdust
+        k! = workgroup_size > 0 ? _evolve_k_primordial!(be, workgroup_size) : _evolve_k_primordial!(be)
+        k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    else
+        k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
+        k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
+           hubble_expansion, P(adot_over_a),
+           d_metals, hasmetals, rate_tables, cool_tables,
+           d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
+    end
 
     e_int .= to_host(d_e)
     HII   .= to_host(d_HII)
@@ -178,17 +251,24 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
     n  = length(rho)
     P  = precision
     be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
     du  = P(density_units); vu2 = P((length_units / time_units)^2)
     tu  = P(time_units);    z   = P(1.0 / a_value - 1.0)
     deut = deuterium && HDI !== nothing
     d_HDI = deut ? HDI : device_zeros(be, P, (n,))
-    dz = device_zeros(be, P, (n,))     # metal and dust abundance pads (zero-copy path: no dust/metals)
-    k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
-    k!(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
-       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-       hubble_expansion, P(adot_over_a),
-       dz, dz, dz, dz, false, rate_tables, cool_tables,
-       dz, dz, dz, dz, dz, false, P(dtfrac), itcap; ndrange = n)
+    if deut
+        k! = workgroup_size > 0 ? _evolve_k_primordial!(be, workgroup_size) : _evolve_k_primordial!(be)
+        k!(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), true,
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    else
+        k! = workgroup_size > 0 ? _evolve_k_reduced!(be, workgroup_size) : _evolve_k_reduced!(be)
+        k!(e_int, HII, H2I, rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh),
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    end
     KA.synchronize(be)
     return nothing
 end
@@ -203,7 +283,7 @@ export solve_chem_device!
 
 @kernel function _evolve_k_u16!(e, HII_u16, H2I_u16, HDI_u16, @Const(rho),
                                  du, vu2, tu, dt, z, hubble, Om, OL, fh, deut, hexp, aoa,
-                                 @Const(aC), @Const(aO), @Const(aSi), @Const(aFe), hasmetals,
+                                 @Const(aMetals), hasmetals,
                                  rtab, ctab,
                                  @Const(aZrel), @Const(aG0), @Const(aAV),
                                  @Const(aNH), @Const(aNH2), hasdust, dtfrac, itcap)
@@ -216,7 +296,8 @@ export solve_chem_device!
         h2i_m = decode_log2sp(T, H2I_u16[i]) * r
         hd_in = deut ? decode_log2sp(T, HDI_u16[i]) * r : zero(T)
 
-        mab = hasmetals ? MetalAbundances{T}(aC[i], aO[i], aSi[i], aFe[i]) :
+        mab = hasmetals ? MetalAbundances{T}(aMetals[i, 1], aMetals[i, 2],
+                                             aMetals[i, 3], aMetals[i, 4]) :
                           MetalAbundances{T}()
         Z_rel = hasdust ? aZrel[i] : zero(T)
         G0_i  = hasdust ? aG0[i]  : zero(T)
@@ -263,6 +344,27 @@ end
     end
 end
 
+@kernel function _evolve_k_u16_reduced!(e, HII_u16, H2I_u16, @Const(rho),
+                                         du, vu2, tu, dt, z, hubble, Om, OL, fh,
+                                         hexp, aoa, rtab, ctab, dtfrac, itcap)
+    i = @index(Global)
+    @inbounds begin
+        T = eltype(e)
+        r = rho[i] * du
+        hii_m = decode_log2sp(T, HII_u16[i]) * r
+        h2i_m = decode_log2sp(T, H2I_u16[i]) * r
+        en, hii, h2, _, _ = evolve_cell(r, e[i] * vu2, hii_m, h2i_m, zero(T),
+                                         dt * tu, z; hubble=hubble, Om=Om, OL=OL,
+                                         fh=fh, deuterium=false,
+                                         hubble_expansion=hexp, adot_over_a=aoa,
+                                         rate_tables=rtab, cool_tables=ctab,
+                                         dtfrac=dtfrac, itcap=itcap)
+        e[i] = en / vu2
+        HII_u16[i] = encode_log2sp(hii / r)
+        H2I_u16[i] = encode_log2sp(h2 / r)
+    end
+end
+
 """
     solve_chem_u16!(rho, e_int, HII_u16, H2I_u16, [HDI_u16]; a_value, dt,
                     density_units, length_units, time_units, …,
@@ -273,7 +375,7 @@ UInt16 log₂-encoded variant of [`solve_chem!`](@ref).  `HII_u16`, `H2I_u16`
 log₂-encoded **mass fractions** X = ρ_species / ρ_total via the codec:
 
 ```
-  u = 0     → X ≈ 7.73e-34   (minimum; sub-TINY)
+  u = 0     → X ≈ 7.73e-34   (storage minimum)
   u = 65535 → X = 1.0
 ```
 
@@ -323,6 +425,7 @@ function solve_chem_u16!(rho::AbstractVector, e_int::AbstractVector,
 
     P   = precision
     be  = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
     du  = P(density_units)
     vu2 = P((length_units / time_units)^2)
     tu  = P(time_units)
@@ -333,10 +436,14 @@ function solve_chem_u16!(rho::AbstractVector, e_int::AbstractVector,
         @assert length(metals.C)==n && length(metals.O)==n &&
                 length(metals.Si)==n && length(metals.Fe)==n
     end
-    d_aC  = hasmetals ? to_device(be, collect(metals.C),  P) : device_zeros(be, P, (n,))
-    d_aO  = hasmetals ? to_device(be, collect(metals.O),  P) : device_zeros(be, P, (n,))
-    d_aSi = hasmetals ? to_device(be, collect(metals.Si), P) : device_zeros(be, P, (n,))
-    d_aFe = hasmetals ? to_device(be, collect(metals.Fe), P) : device_zeros(be, P, (n,))
+    h_metals = zeros(P, n, 4)
+    if hasmetals
+        h_metals[:, 1] .= metals.C
+        h_metals[:, 2] .= metals.O
+        h_metals[:, 3] .= metals.Si
+        h_metals[:, 4] .= metals.Fe
+    end
+    d_metals = to_device(be, h_metals, P)
 
     hasdust = dust
     if hasdust
@@ -359,12 +466,26 @@ function solve_chem_u16!(rho::AbstractVector, e_int::AbstractVector,
     d_HDI_u16 = deut ? to_device(be, collect(HDI_u16), UInt16) :
                        device_zeros(be, UInt16, (n,))
 
-    k! = workgroup_size > 0 ? _evolve_k_u16!(be, workgroup_size) : _evolve_k_u16!(be)
-    k!(d_e, d_HII_u16, d_H2I_u16, d_HDI_u16, d_rho, du, vu2, tu,
-       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-       hubble_expansion, P(adot_over_a),
-       d_aC, d_aO, d_aSi, d_aFe, hasmetals, rate_tables, cool_tables,
-       d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
+    if !deut && !hasmetals && !hasdust
+        k! = workgroup_size > 0 ? _evolve_k_u16_reduced!(be, workgroup_size) : _evolve_k_u16_reduced!(be)
+        k!(d_e, d_HII_u16, d_H2I_u16, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh),
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    elseif !hasmetals && !hasdust
+        k! = workgroup_size > 0 ? _evolve_k_u16_primordial!(be, workgroup_size) : _evolve_k_u16_primordial!(be)
+        k!(d_e, d_HII_u16, d_H2I_u16, d_HDI_u16, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), true,
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    else
+        k! = workgroup_size > 0 ? _evolve_k_u16!(be, workgroup_size) : _evolve_k_u16!(be)
+        k!(d_e, d_HII_u16, d_H2I_u16, d_HDI_u16, d_rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
+           hubble_expansion, P(adot_over_a),
+           d_metals, hasmetals, rate_tables, cool_tables,
+           d_Zrel, d_G0, d_AV, d_NH, d_NH2, hasdust, P(dtfrac), itcap; ndrange = n)
+    end
 
     e_int   .= to_host(d_e)
     HII_u16 .= to_host(d_HII_u16)
@@ -393,15 +514,24 @@ function solve_chem_device_u16!(rho, e_int, HII_u16, H2I_u16, HDI_u16 = nothing;
     n   = length(rho)
     P   = precision
     be  = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
     du  = P(density_units); vu2 = P((length_units / time_units)^2)
     tu  = P(time_units);    z   = P(1.0 / a_value - 1.0)
     deut = deuterium && HDI_u16 !== nothing
     d_HDI_u16 = deut ? HDI_u16 : device_zeros(be, UInt16, (n,))
-    k! = workgroup_size > 0 ? _evolve_k_u16_primordial!(be, workgroup_size) : _evolve_k_u16_primordial!(be)
-    k!(e_int, HII_u16, H2I_u16, d_HDI_u16, rho, du, vu2, tu,
-       P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
-       hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
-       P(dtfrac), itcap; ndrange = n)
+    if deut
+        k! = workgroup_size > 0 ? _evolve_k_u16_primordial!(be, workgroup_size) : _evolve_k_u16_primordial!(be)
+        k!(e_int, HII_u16, H2I_u16, d_HDI_u16, rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh), true,
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    else
+        k! = workgroup_size > 0 ? _evolve_k_u16_reduced!(be, workgroup_size) : _evolve_k_u16_reduced!(be)
+        k!(e_int, HII_u16, H2I_u16, rho, du, vu2, tu,
+           P(dt), z, P(hubble), P(Om), P(OL), P(fh),
+           hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
+           P(dtfrac), itcap; ndrange = n)
+    end
     KA.synchronize(be)
     return nothing
 end

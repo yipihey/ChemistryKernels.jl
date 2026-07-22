@@ -5,9 +5,13 @@
 # with the standard Float32 path within the storage quantization tolerance.
 
 using ChemistryKernels, Test
+using EmissionKernels
 using ChemistryKernels: encode_log2sp, decode_log2sp,
                         encode_log2sp_vec, decode_log2sp_vec,
                         solve_chem!, solve_chem_u16!
+
+const _DU_U = 2.566e-21; const _LU_U = 5.557e20; const _TU_U = 4.337e11
+const _VU2_U = (_LU_U / _TU_U)^2
 
 # ── Codec unit tests ──────────────────────────────────────────────────────────
 
@@ -47,10 +51,36 @@ using ChemistryKernels: encode_log2sp, decode_log2sp,
     @test all(abs.(xr_vec .- xs_vec) ./ xs_vec .< 5e-3)
 end
 
-# ── Physics sanity: solve_chem_u16! produces valid output ────────────────────
+@testset "solve_chem_u16! CPU≡Metal production parity" begin
+    if ChemistryKernels.has_backend(:metal)
+        n = 32
+        rho = fill(0.17f0, n)
+        e_init = fill(Float32((1.3806e-16 * 3000.0) /
+                              ((5/3 - 1) * 1.22 * 1.6605e-24) / _VU2_U), n)
+        h_init = encode_log2sp_vec(fill(0.06f0, n))
+        h2_init = encode_log2sp_vec(fill(1f-6, n))
+        rt_cpu = build_rate_tables(; backend=:cpu, precision=Float32)
+        ct_cpu = EmissionKernels.build_cooling_tables(; backend=:cpu, precision=Float32)
 
-const _DU_U = 2.566e-21; const _LU_U = 5.557e20; const _TU_U = 4.337e11
-const _VU2_U = (_LU_U / _TU_U)^2
+        e_cpu = copy(e_init); h_cpu = copy(h_init); h2_cpu = copy(h2_init)
+        solve_chem_u16!(rho, e_cpu, h_cpu, h2_cpu;
+            a_value=1/1001, dt=0.1, density_units=_DU_U,
+            length_units=_LU_U, time_units=_TU_U, backend=:cpu,
+            precision=Float32, rate_tables=rt_cpu, cool_tables=ct_cpu)
+
+        e_gpu = copy(e_init); h_gpu = copy(h_init); h2_gpu = copy(h2_init)
+        solve_chem_u16!(rho, e_gpu, h_gpu, h2_gpu;
+            a_value=1/1001, dt=0.1, density_units=_DU_U,
+            length_units=_LU_U, time_units=_TU_U, backend=:metal,
+            precision=Float32)
+
+        @test isapprox(e_gpu, e_cpu; rtol=5f-4)
+        @test h_gpu == h_cpu
+        @test h2_gpu == h2_cpu
+    end
+end
+
+# ── Physics sanity: solve_chem_u16! produces valid output ────────────────────
 
 @testset "solve_chem_u16! physical sanity" begin
     n = 64; fh = 0.76

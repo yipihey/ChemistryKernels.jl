@@ -42,7 +42,7 @@ _relmax(a, b) = maximum(abs.(a .- b) ./ (abs.(b) .+ eps()))
     # These tolerances document the actual regime sensitivity, not physical accuracy:
     # in production hydro coupling chemistry error << hydro truncation error anyway.
     for (T0, xHII, a_value, dt, tol_e, tol_x) in (
-            (2727.0, 0.06, 1/1001, 2.0, 5e-3, 1e-2),   # cosmological cold
+            (2727.0, 0.06, 1/1001, 2.0, 5e-3, 1.1e-2), # cosmological cold; coupled H solve
             (1.0e4,  0.50, 1/51,   0.5, 1e-1, 2e-1))   # warm, faster chemistry
         rho, e0, HII0, H2I0, HDI0 = _cells_p(; T0 = T0, xHII = xHII)
         e_a, hii_a, h2i_a, _ = _run_p(rho, e0, HII0, H2I0, HDI0; a_value = a_value, dt = dt, dtfrac = 0.1)

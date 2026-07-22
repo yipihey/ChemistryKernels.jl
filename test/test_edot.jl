@@ -1,6 +1,6 @@
 using ChemistryKernels, Test
 using ChemistryKernels: cooling_edot, ceHI, ciHI, reHII, brem,
-    GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow, comp1_cmb, comp2_cmb, MH, TINY
+    GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow, comp1_cmb, comp2_cmb, MH
 include(joinpath(@__DIR__, "oracle.jl")); using .ChemOracle
 
 @testset "edot: term-by-term transcription" begin
@@ -17,7 +17,7 @@ include(joinpath(@__DIR__, "oracle.jl")); using .ChemOracle
     galdl_c = GAHI(Tc)*nHI + GAH2(Tc)*nH2 + GAHe(Tc)*nHeI + GAHp(Tc)*nHII + GAel(Tc)*nde
     cool_cmb = H2LTE(Tc)/(1 + H2LTE(Tc)/galdl_c)
     h2 = nH2*(cool_gas - cool_cmb)
-    hd = T > Tc ? nHD*HDlte(T)/(1 + (HDlte(T)/nHI)/max(HDlow(T),TINY)) : 0.0
+    hd = T > Tc ? nHD*HDlte(T)/(1 + HDlte(T)/(nHI*HDlow(T))) : 0.0
     compton = comp1_cmb(z)*(T - Tc)*nde
     ref = -(atomic + h2 + hd + compton)
     @test isapprox(cooling_edot(nHI,nHII,nHeI,nde,nH2,nHD,T,z), ref; rtol=1e-12)
@@ -58,7 +58,7 @@ end
 
         nHII = xHII*fh*rc_*DU/MH
         nH2  = xH2*fh*rc_*DU/(2*MH)
-        nHI  = max((fh*rc_ - xHII*fh*rc_ - xH2*fh*rc_)*DU/MH, TINY)
+        nHI  = max((fh*rc_ - xHII*fh*rc_ - xH2*fh*rc_)*DU/MH, 0.0)
         nHeI = (1-fh)*rho_cgs/(4*MH)
         edot_jl = cooling_edot(nHI, nHII, nHeI, nHII, nH2, 0.0, T, z)
 

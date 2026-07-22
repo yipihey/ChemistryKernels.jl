@@ -12,8 +12,9 @@
 #     for the stiff solver and for differentiability (the interpolant is piecewise-
 #     linear ⇒ a well-defined slope inside every cell, AD-friendly).
 #
-# The analytic `build_rates` remains the default and the bit-exact reference; the table
-# is opt-in (`evolve_cell(...; rate_tables=…)`).  Only the pure-T pieces are tabulated:
+# Analytic `build_rates` remains the CPU default and bit-exact reference. Tables are
+# explicit in the scalar API (`evolve_cell(...; rate_tables=…)`); GPU extensions may
+# cache and select them automatically in batched launchers. Only pure-T pieces are tabulated:
 # the Peebles C-factor (needs nHI, Hz) and the Trad terms (β₁s, k27, k28, He Saha,
 # hoisted in `cmb_rates`) stay as cheap arithmetic on the interpolated aB/bet.
 
@@ -33,7 +34,8 @@ const _NRT = length(_RT_COLS)
     RateTables(logk, x0, invdx, N)
 
 A precomputed log–log rate table: `logk` is an `(N, $(_NRT))` array of `log₁₀(rate)` on a
-uniform `log₁₀T` grid, `x0 = log₁₀(Tmin)`, `invdx = 1/Δlog₁₀T`.  Device-resident (adapts
+uniform `log₁₀T` grid, with exact-zero nodes encoded as `-Inf`; `x0 = log₁₀(Tmin)`,
+`invdx = 1/Δlog₁₀T`. Device-resident (adapts
 to `CuDeviceArray`/Metal inside a kernel via `Adapt`).  Build with [`build_rate_tables`](@ref).
 """
 struct RateTables{A,R}
@@ -69,18 +71,26 @@ function build_rate_tables(; Tmin::Real = 1.0, Tmax::Real = 1.0e9, N::Int = 1024
                 k16(Tj), k17(Tj), k18(Tj), k19(Tj), k22(Tj), k57(Tj), k58(Tj),
                 k50(Tj), k51(Tj), k52(Tj), k53(Tj), k54(Tj), k55(Tj), k56(Tj))
         @inbounds for c in 1:_NRT
-            M[j, c] = log10(max(vals[c], R(1.0e-300)))   # all rates > 0 (floored at tiny)
+            v = vals[c]
+            M[j, c] = v > zero(R) ? log10(v) : -R(Inf)
         end
     end
     dev = to_device(ChemistryKernels.backend(backend), M, R)
     return RateTables(dev, R(x0), R(1.0 / dx), N)
 end
 
-# One column's interpolated rate: linear in (log₁₀T, log₁₀ rate), exponentiated back.
+# One column's interpolated rate. Positive endpoints use log–log interpolation. Two
+# zero endpoints remain exactly zero; a zero/nonzero boundary cell ramps linearly from
+# zero to the finite endpoint, avoiding both `log10(0)` and `Inf - Inf` arithmetic.
 @inline function _rt_lookup(L, N::Int, i::Int, f, c::Int)
     @inbounds lo = L[i + (c - 1) * N]
     @inbounds hi = L[i + 1 + (c - 1) * N]
-    return exp10(lo + f * (hi - lo))
+    lo_finite = isfinite(lo)
+    hi_finite = isfinite(hi)
+    lo_finite && hi_finite && return exp10(lo + f * (hi - lo))
+    !lo_finite && !hi_finite && return zero(f)
+    lo_finite && return (one(f) - f) * exp10(lo)
+    return f * exp10(hi)
 end
 
 """
@@ -95,7 +105,8 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
     R = typeof(T)
     # locate T on the log grid (clamp to the endpoints → constant extrapolation outside)
     s = (log10(T) - R(rt.x0)) * R(rt.invdx)
-    s = clamp(s, zero(R), R(rt.N) - one(R) - R(1.0e-9))
+    smax = R(rt.N - 1)
+    s = clamp(s, zero(R), smax - eps(R)*smax)
     b = unsafe_trunc(Int, s)            # 0-based bin
     f = s - R(b)
     i = b + 1                            # 1-based row of the lower node
@@ -113,9 +124,18 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
     k_b1s  = cr.b1s * k2_val / (aB * R(1.0e6))      # = cr.b1s·C
     she1, she2 = cr.she
 
-    base = (; k1=rd(3), k2=k2_val, k3=rd(4), k4=rd(5), k5=rd(6), k6=rd(7),
-            k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=rd(12), k12=rd(13),
-            k13=rd(14), k14=rd(15), k15=rd(16), k16=rd(17), k17=rd(18), k18=rd(19),
+    # Preserve the analytic fits' exact inactive domains. Interpolation must not
+    # smear a positive node across a hard physical branch boundary.
+    Tev = T / R(11605.0)
+    k3v  = Tev <= R(0.8)  ? zero(R) : rd(4)
+    k5v  = Tev <= R(0.8)  ? zero(R) : rd(6)
+    k11v = Tev <= R(0.3)  ? zero(R) : rd(12)
+    k12v = Tev <= R(0.3)  ? zero(R) : rd(13)
+    k13v = Tev <= R(0.3)  ? zero(R) : rd(14)
+    k14v = Tev <= R(0.04) ? zero(R) : rd(15)
+    base = (; k1=rd(3), k2=k2_val, k3=k3v, k4=rd(5), k5=k5v, k6=rd(7),
+            k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=k11v, k12=k12v,
+            k13=k13v, k14=k14v, k15=rd(16), k16=rd(17), k17=rd(18), k18=rd(19),
             k19=rd(20), k22=rd(21), k57=rd(22), k58=rd(23),
             k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s, she1=she1, she2=she2)
     deuterium || return base

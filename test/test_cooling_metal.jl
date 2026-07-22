@@ -9,18 +9,18 @@ const CK = ChemistryKernels
 
 @testset "cooling_metal_integration" begin
 
-    @testset "GOLDEN bit-identity: cooling_edot unchanged by the EmissionKernels move" begin
-        # captured from ChemistryKernels BEFORE the radiative physics was relocated.
+    @testset "exact-zero cooling regression" begin
+        # Frozen after removing artificial low-rate and HD-denominator floors.
         ab = metal_abund(solar=1.0)
         let s = (nHI=0.7,nHII=0.3,nHeI=0.06,nde=0.3,nH2=1e-3,nHD=1e-6,T=3000.0,z=30.0)
-            @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z) == -2.396333826229013e-25
+            @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z) == -2.3266797334816296e-25
             @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z; nH=1.0, metals=ab) ==
-                  -5.593173118817311e-25
+                  -5.523519026069927e-25
         end
         let s = (nHI=0.99,nHII=0.01,nHeI=0.08,nde=0.01,nH2=1e-5,nHD=1e-8,T=150.0,z=0.0)
-            @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z) == -4.074876222048002e-29
+            @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z) == -1.1840363166958693e-29
             @test cooling_edot(s.nHI,s.nHII,s.nHeI,s.nde,s.nH2,s.nHD,s.T,s.z; nH=1.0, metals=ab) ==
-                  -3.9535955487627824e-27
+                  -3.9246871497092614e-27
         end
     end
 

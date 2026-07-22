@@ -20,10 +20,6 @@
 
 export network_step
 
-# The species floor (absolute, code units — negligible vs real abundances in any
-# cosmological density_units; see the temperature.jl test note).
-const _NET_TINY = 1.0e-20
-
 """
     network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II, yDI, yDII, yHDI, K, dt;
                  deuterium = false, dust_rates = nothing)
@@ -44,8 +40,8 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
                               GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0,
                               dust_rates = nothing)
     R    = typeof(yHI)
-    tiny = R(_NET_TINY)
-    two  = R(2); half = R(0.5); four = R(4)
+    z    = zero(R)
+    two  = R(2); half = R(0.5); three = R(3); four = R(4)
 
     # Helium ionisation.  Two modes (both in the mass-equivalent ×4 convention,
     # yHeX = 4·n(HeX)):
@@ -67,7 +63,7 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
     nHe4 = (one(R) - R(fh)) * d                  # total He in ×4 convention
     if yHeII_in === nothing
         _, nHeII, nHeIII = helium_equilibrium(K.she1, K.she2, K.k3, K.k4, K.k5, K.k6,
-                                              max(yde, tiny), nHe4 / four;
+                                              max(yde, z), nHe4 / four;
                                               GamHeI = GamHeI, GamHeII = GamHeII)
         yHeII  = four * nHeII                     # back to ×4 convention
         yHeIII = four * nHeIII
@@ -75,7 +71,7 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
         yHeII   = R(yHeII_in)
         yHeIII  = R(yHeIII_in)
     end
-    yHeI = max(nHe4 - yHeII - yHeIII, tiny)      # neutral He (×4)
+    yHeI = max(nHe4 - yHeII - yHeIII, z)         # neutral He (×4)
 
     k1=K.k1; k2=K.k2; k3=K.k3; k4=K.k4; k5=K.k5; k6=K.k6; k7=K.k7; k8=K.k8
     k9=K.k9; k10=K.k10; k11=K.k11; k12=K.k12; k13=K.k13; k14=K.k14; k15=K.k15
@@ -105,23 +101,22 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
                               k9, k10, k11, k17, k18, k19, k28)
     nH2II  = H2IIeq / two          # n(H₂⁺); H2IIeq carries the 2× mass-equiv convention
 
-    # 1) HI  (+ β₁s CMB photoionisation of H(1s); + k28 H₂⁺ photodissociation return;
-    #     + Γ_HI external UV-background photoionisation HI+γ→HII+e [s⁻¹], 0 by default)
-    sc = k2*yHII*yde + two*k13*yHI*yH2I/two + k11*yHII*yH2I/two +
-         two*k12*yde*yH2I/two + k14*yHM*yde + k15*yHM*yHI +
-         two*k16*yHM*yHII + two*k18*H2IIeq*yde/two + k19*H2IIeq*yHM/two +
-         k28*nH2II
-    ac = k1*yde + k7*yde + k8*yHM + k9*yHII + k10*H2IIeq/two +
-         two*k22*yHI^2 + k57*yHI + k58*yHeI/four + k_beta1s + R(GamHI)
-    HIp = (sc*dt + yHI) / (one(R) + ac*dt)
-
-    # 2) HII  (+ β₁s source; + k28 H₂⁺ photodissociation return; + Γ_HI photoionisation;
-    #     + grain-assisted recombination when dust_rates supplied)
-    sc = k1*yHI*yde + k10*H2IIeq*yHI/two + k57*yHI*yHI + k58*yHI*yHeI/four +
-         k_beta1s*yHI + k28*nH2II + R(GamHI)*yHI
+    # 1,2) Coupled HI/HII update. At recombination redshifts the β₁s exchange is
+    # extremely stiff. Updating HI and HII as two lagged fixed points makes the neutral
+    # fraction alternate between successive substeps. Instead use H conservation to
+    # substitute HI = H_atomic - HII in every one-body ionisation source and solve the
+    # resulting backward-Euler equation once. The H-H ionisation term freezes one HI
+    # factor in qion, consistent with the other semi-implicit nonlinear terms.
+    h_in_hd = deuterium ? yHDI/three : zero(R)
+    Hatomic = max(R(fh)*d - yH2I - HMp - H2IIeq - h_in_hd, z)
+    qion = k1*yde + k57*yHI + k58*yHeI/four + k_beta1s + R(GamHI)
+    sc_other = k10*H2IIeq*yHI/two + k28*nH2II
     ac_grr = dust_rates !== nothing ? dust_rates.k_grr * yde : zero(R)
     ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM + ac_grr
-    HIIp = (sc*dt + yHII) / (one(R) + ac*dt)
+    HIIp = (yHII + (qion*Hatomic + sc_other)*dt) /
+           (one(R) + (qion + ac)*dt)
+    HIIp = clamp(HIIp, z, Hatomic)
+    HIp = Hatomic - HIIp
 
     # 3) e⁻ provisional — used ONLY for downstream consistency
     sc = k8*yHM*yHI + k15*yHM*yHI + k17*yHM*yHII + k57*yHI*yHI + k58*yHI*yHeI/four +
@@ -145,7 +140,6 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
     # ── (D) deuterium (OLD state) ────────────────────────────────────────────
     if deuterium
         k50=K.k50; k51=K.k51; k52=K.k52; k53=K.k53; k54=K.k54; k55=K.k55; k56=K.k56
-        three = R(3)
         # 1) DI
         sc = k2*yDII*yde + k51*yDII*yHI + two*k55*yHDI*yHI/three
         ac = k1*yde + k50*yHII + k54*yH2I/two + k56*yHM
@@ -163,16 +157,24 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
     end
 
     # ── (E) field assignment + charge-conservation nₑ ────────────────────────
-    HI_n   = max(HIp,  tiny)
-    HII_n  = max(HIIp, tiny)
-    # nₑ from charge conservation: NEW HII, He neutral, but OLD HM/H2II.
-    de_n   = HII_n + yHeII/four + yHeIII/two - yHM + yH2II/two
-    HM_n   = max(HMp,   tiny)
-    H2I_n  = max(H2Ip,  tiny)
-    H2II_n = max(H2IIp, tiny)
-    DI_n   = max(DIp,  tiny)
-    DII_n  = max(DIIp, tiny)
-    HDI_n  = max(HDIp, tiny)
+    DI_n   = max(DIp,  z)
+    DII_n  = max(DIIp, z)
+    HDI_n  = max(HDIp, z)
+    # Exact H-nuclei conservation, including the one H nucleus in each HD molecule.
+    # H₂ is the only non-trace molecular reservoir; clip trace intermediaries into the
+    # remaining budget and derive the two atomic stages from what remains.
+    Hbudget = max(R(fh)*d - (deuterium ? HDI_n/three : z), z)
+    H2I_n  = clamp(H2Ip, z, Hbudget)
+    Hrem   = Hbudget - H2I_n
+    HM_n   = clamp(HMp, z, Hrem)
+    Hrem  -= HM_n
+    H2II_n = clamp(H2IIp, z, Hrem)
+    Hatomic_n = Hrem - H2II_n
+    HII_n = clamp(HIIp, z, Hatomic_n)
+    HI_n  = Hatomic_n - HII_n
+    # nₑ from charge conservation, using the new conservative H state and the
+    # algebraic intermediaries returned by this same step.
+    de_n = max(HII_n + yHeII/four + yHeIII/two - HM_n + H2II_n/two, z)
 
     return (; yHI = HI_n, yHII = HII_n, yde = de_n, yH2I = H2I_n,
             yHM = HM_n, yH2II = H2II_n, yDI = DI_n, yDII = DII_n, yHDI = HDI_n)

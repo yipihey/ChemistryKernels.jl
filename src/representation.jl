@@ -24,7 +24,7 @@ Convert host code-unit mass densities to PHYSICAL CGS number densities (cm^-3) o
 the reduced-network species, reconstructing the non-advected ones as the
 Abel/Anninos et al. 1997 network does:
   nₑ = n_HII ;  n_HI = fh·ρ − n_HII − n_H2(mass) ;  n_HeI = (1−fh)·ρ (mass→/4) ;
-  H⁻, H₂⁺ (and D⁺) start at the floor value (equilibrium fills them).
+  H⁻ and H₂⁺ start at zero (algebraic equilibrium fills them).
 Density is taken to PHYSICAL via density_units/a³ (the reduced wrapper passes a
 comoving ρ, so the /a³ factor is applied here).
 Returns a NamedTuple of number densities + n_H.
@@ -37,11 +37,11 @@ function cgs_number_densities(rho, HII, H2I, HDI, density_units, a_value;
     nH   = fh * rho_cgs / MH                       # H nuclei per cm^3
     nHII = HII * du / MH
     nH2  = H2I * du / (2 * MH)                     # the network's mass-equivalent convention (yH2I = 2·n(H₂))
-    nHI  = max(nH - nHII - 2 * nH2, TINY)          # H conservation (2 H per H2)
+    nHI  = max(nH - nHII - 2 * nH2, 0.0)           # H conservation (2 H per H2)
     nHeI = (1 - fh) * rho_cgs / (4 * MH)
     nHDI = deuterium ? HDI * du / (3 * MH) : 0.0   # HD mass = 3 amu
     return (; nH, nHI, nHII, ne = nHII, nHeI,
-            nHM = TINY, nH2 = nH2, nH2II = TINY,
+            nHM = 0.0, nH2 = nH2, nH2II = 0.0,
             nDI = deuterium ? DTOH_SEED * nHI : 0.0,
             nDII = deuterium ? DTOH_SEED * nHII : 0.0,
             nHDI, du)

@@ -84,4 +84,28 @@ _relmax(a, b) = maximum(abs.(a .- b)) / (maximum(abs.(b)) + eps())
     tn = _CK.table_rates(rt, Tnode, 0.1, Hz, cr; deuterium = true)
     @test isapprox(tn.k1, an.k1; rtol = 1e-6)
     @test isapprox(tn.k2, an.k2; rtol = 1e-6)
+
+    # 5. exact-zero nodes and empty cooling states remain finite in both precisions -----
+    for R in (Float64, Float32)
+        rtz = _CK.build_rate_tables(; precision = R, backend = :cpu, N = 128)
+        ctz = _EK.build_cooling_tables(; precision = R, backend = :cpu, N = 128)
+        Tz = R(100); crz = _CK.cmb_rates(R(2.725))
+        kz = _CK.table_rates(rtz, Tz, R(1), R(1e-16), crz; deuterium = true)
+        @test kz.k3 == zero(R)
+        @test kz.k5 == zero(R)
+        @test kz.k11 == zero(R)
+        @test kz.k12 == zero(R)
+        @test kz.k13 == zero(R)
+        @test kz.k14 == zero(R)
+        @test all(isfinite, values(kz))
+        kmax = _CK.table_rates(rtz, R(1e9), R(1), R(1e-16), crz; deuterium = true)
+        @test all(isfinite, values(kmax))
+        empty_cooling = _EK.cooling_rate_total_tab(
+            ctz, zero(R), zero(R), zero(R), zero(R), zero(R), zero(R), Tz, R(20))
+        @test empty_cooling == zero(R)
+        @test isfinite(empty_cooling)
+        hot_cooling = _EK.cooling_rate_total_tab(
+            ctz, R(0.7), R(0.3), R(0.08), R(0.3), R(1e-3), R(1e-7), R(1e9), R(20))
+        @test isfinite(hot_cooling)
+    end
 end

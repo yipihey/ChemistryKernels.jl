@@ -32,12 +32,11 @@ Design contract (mirrors `PPMKernels`/`PoissonKernels`):
     cooling coefficients are checked against the published Abel/Anninos et al.
     (1997) analytic fits (and, for recombination, against HyRec-2).
 
-  * **Analytic by default; tables opt-in.** Every rate/cooling coefficient is evaluated
-    DIRECTLY from its analytic fit (Abel/Anninos et al. 1997 and the references therein).
-    This analytic path is the default and the bit-exact reference. For the GPU hot path an
-    OPTIONAL log–log rate table (`build_rate_tables`/`table_rates`, see `rate_tables.jl`)
-    replaces the ~25 per-sub-step temperature fits with a branchless monotonic
-    interpolation; pass it via `solve_chem_device!(...; rate_tables=…)`.
+  * **Analytic CPU reference; tabulated GPU production path.** CPU calls evaluate every
+    rate/cooling coefficient directly from its published fit by default. GPU extensions
+    may provide cached log–log tables when none are supplied; this is both the fastest
+    path and avoids generating enormous device programs from the analytic fits. Explicit
+    `rate_tables` / `cool_tables` always take precedence.
 
   * **f32-safe representation.** State is carried as physical abundances relative
     to the hydrogen number density (`x_i = n_i/n_H`, dimensionless and O(1) for
@@ -86,6 +85,20 @@ register_backend!(name::Symbol, be) = (_BACKENDS[name] = be)
 
 "True when backend `name` is available (`:metal` needs `using Metal` first)."
 has_backend(name::Symbol) = haskey(_BACKENDS, name)
+
+# Backend extensions may provide persistent default tables. CPU and backends that do
+# not opt in retain the exact analytic reference (`nothing`). These hooks live here so
+# every public host/device launcher can resolve the same policy without depending on a
+# particular GPU package.
+_default_rate_tables(::Val, ::Type) = nothing
+_default_cool_tables(::Val, ::Type) = nothing
+
+@inline _resolve_rate_tables(name::Symbol, P::Type, rt) =
+    rt === nothing ? _default_rate_tables(Val(name), P) : rt
+@inline function _resolve_tables(name::Symbol, P::Type, rt, ct)
+    return (_resolve_rate_tables(name, P, rt),
+            ct === nothing ? _default_cool_tables(Val(name), P) : ct)
+end
 
 """
     backend(name::Symbol = :cpu)

@@ -1,0 +1,65 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - name: Add Julia registries
+        run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
+      - name: Instantiate Julia environment
+        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+      - name: Install site dependencies
+        working-directory: docs-site
+        run: npm ci
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Regenerate, build, and test documentation
+        working-directory: docs-site
+        env:
+          GITHUB_PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          GITHUB_PAGES_ORIGIN: ${{ steps.pages.outputs.origin }}
+        run: npm test
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs-site/dist/github-pages
+
+  deploy:
+    name: Deploy documentation
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

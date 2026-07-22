@@ -187,7 +187,7 @@ end
 # ── routine history driver (calls solve_chem_mixing! over the field) ─────────
 # Mirror of the reference loop but driving the production routine.  `smoothing`
 # returns the per-cell smoothed NEUTRAL number density; it is fed via
-# smoothed_is_neutral=true as nsm = n1s_sm·MH/fh (the kernel undoes ·fh/MH).
+# smoothed_is_neutral=true as the corresponding neutral-H mass nsm = n1s_sm·MH.
 function run_routine_field_history(; z_start, z_end, n_steps, Δ, w, fa,
                                      smoothing, recfast_hswitch=true, T0=nothing,
                                      hubble=71.0, Om=0.27, OL=0.73, fh=FH, x0=nothing)
@@ -212,7 +212,7 @@ function run_routine_field_history(; z_start, z_end, n_steps, Δ, w, fa,
         end
         x_now = HII_v ./ (rho_c .* fh)
         n1s_local = (1 .- x_now) .* nH
-        nsm_v .= smoothing(n1s_local) .* MH ./ fh        # units lock: kernel does ·fh/MH
+        nsm_v .= smoothing(n1s_local) .* MH              # neutral-H mass density
         solve_chem_mixing!(rho_v, e_v, HII_v, H2I_v, nsm_v;
                            a_value=1.0/(1.0+z_lo), dt=dt,
                            density_units=1.0, length_units=1.0, time_units=1.0,
@@ -287,7 +287,7 @@ end
 
 @testset "units_lock" begin
     # Feeding a neutral smoothed field via smoothed_is_neutral=true must round-trip
-    # through the kernel's n_sm·fh/MH conversion: nsm = n1s·MH/fh.  If the units were
+    # through the kernel's neutral-mass conversion: nsm = n1s·MH. If the units were
     # wrong (off by ~MH/fh≈2e-24) the escape rate would be astronomically off and a
     # single step would not match the independent single-bin reference.
     z = 1100.0; nH = n_H_at_z(z); Hz = _Hz(z); T = Tb_camb(z)
@@ -295,7 +295,7 @@ end
     dt = 0.02/Hz
     # routine, 1 cell, full mixing, smoothed neutral fed directly
     rho = [nH*MH/FH]; HII = [xe*nH*MH]; H2I = [1e-40]; e = [e_from_T(T, xe, rho[1])]
-    nsm = [n1s_target*MH/FH]
+    nsm = [n1s_target*MH]
     solve_chem_mixing!(rho, e, HII, H2I, nsm;
                        a_value=1/(1+z), dt=dt, density_units=1.0, length_units=1.0,
                        time_units=1.0, fa_table=FAlphaTable([0.,1e5],[1.,1.]),
@@ -369,8 +369,8 @@ end
                 density_units=1.0, length_units=1.0, time_units=1.0)
     solve_chem_mixing!(rho, e2, HII2, H22, copy(rho); a_value=1/(1+z), dt=dt,
                        density_units=1.0, length_units=1.0, time_units=1.0, fa_table=FA_ZERO)
-    @test HII2 == HII1
-    @test e2 == e1
+    @test HII2 ≈ HII1 rtol=16eps(Float64)
+    @test e2 ≈ e1 rtol=16eps(Float64)
 
     # Histories at f_α = 0, 0.5, 1 (smoothed field = volume mean).
     zr0, xv0 = run_routine_field_history(; z_start=z0, z_end=z1, n_steps=ns, Δ=Δ, w=w,

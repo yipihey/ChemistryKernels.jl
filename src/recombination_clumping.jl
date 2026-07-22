@@ -23,6 +23,8 @@
 export recfast_gauss_factor, recfast_v2_kl_factor, peebles_k2_mixing, n1s_effective
 export build_rates_mixing, table_rates_mixing, evolve_cell_mixing
 export solve_chem_mixing!, solve_chem_mixing_device!
+export evolve_cell_analytic_mixing
+export solve_chem_analytic_mixing!, solve_chem_analytic_mixing_device!
 
 # recfast_alpha is defined in recombination.jl (loaded before this file).
 
@@ -182,7 +184,8 @@ the local and smoothed neutral densities. This is the production GPU hot path.
                                     gauss::Real = one(typeof(T)))
     R = typeof(T)
     s = (log10(T) - R(rt.x0)) * R(rt.invdx)
-    s = clamp(s, zero(R), R(rt.N) - one(R) - R(1.0e-9))
+    smax = R(rt.N - 1)
+    s = clamp(s, zero(R), smax - eps(R)*smax)
     b = unsafe_trunc(Int, s)
     f = s - R(b)
     i = b + 1
@@ -201,11 +204,177 @@ the local and smoothed neutral densities. This is the production GPU hot path.
     k_b1s = cr.b1s * k2_val / (aB * R(1.0e6))
     she1, she2 = cr.she
 
-    return (; k1=rd(3), k2=k2_val, k3=rd(4), k4=rd(5), k5=rd(6), k6=rd(7),
-            k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=rd(12), k12=rd(13),
-            k13=rd(14), k14=rd(15), k15=rd(16), k16=rd(17), k17=rd(18),
+    Tev = T / R(11605.0)
+    k3v  = Tev <= R(0.8)  ? zero(R) : rd(4)
+    k5v  = Tev <= R(0.8)  ? zero(R) : rd(6)
+    k11v = Tev <= R(0.3)  ? zero(R) : rd(12)
+    k12v = Tev <= R(0.3)  ? zero(R) : rd(13)
+    k13v = Tev <= R(0.3)  ? zero(R) : rd(14)
+    k14v = Tev <= R(0.04) ? zero(R) : rd(15)
+    return (; k1=rd(3), k2=k2_val, k3=k3v, k4=rd(5), k5=k5v, k6=rd(7),
+            k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=k11v, k12=k12v,
+            k13=k13v, k14=k14v, k15=rd(16), k16=rd(17), k17=rd(18),
             k18=rd(19), k19=rd(20), k22=rd(21), k57=rd(22), k58=rd(23),
             k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s, she1=she1, she2=she2)
+end
+
+# ── Fast analytic Ly-alpha mixing path ───────────────────────────────────────
+
+"""
+    evolve_cell_analytic_mixing(rho, e, HII_m, H2I_m, n_sm_cgs, dt, z; ...)
+
+Closed-form primordial H/H2 chemistry with density-dependent Ly-alpha escape.
+This is the recombination-era counterpart of [`evolve_cell_analytic`](@ref): it
+keeps the analytic Compton, HII Riccati, and H2 updates, while replacing the
+local Peebles coefficient with [`peebles_k2_mixing`](@ref). `n_sm_cgs` is the
+host-supplied smoothed H number density, or smoothed neutral-H number density
+when `smoothed_is_neutral=Val(true)`.
+
+The routine is pure and allocation-free. With `f_alpha=0`, `fudge=gauss=1`, it
+reduces to `evolve_cell_analytic`.
+"""
+@inline function evolve_cell_analytic_mixing(rho, e, HII_m, H2I_m,
+                                             n_sm_cgs, dt, z;
+                                             f_alpha = zero(typeof(e)),
+                                             Xe_mean = zero(typeof(e)),
+                                             smoothed_is_neutral::Val{SN} = Val(false),
+                                             fudge = one(typeof(e)),
+                                             gauss = one(typeof(e)),
+                                             hubble = 71.0, Om = 0.27, OL = 0.73,
+                                             fh = FH_DEFAULT,
+                                             hubble_expansion::Bool = false,
+                                             adot_over_a = NaN,
+                                             rate_tables = nothing,
+                                             cool_tables = nothing,
+                                             itcap::Int = _SUB_ITMAX,
+                                             dtfrac::Real = 0.1) where {SN}
+    R = typeof(e)
+    # Preserve the exact no-mixing contract by using the canonical analytic
+    # kernel when the escape correction is disabled. This also ensures that
+    # improvements to its H2 and high-z helium closures automatically carry
+    # into this entry point instead of being duplicated here.
+    if R(f_alpha) == zero(R) && R(fudge) == one(R) && R(gauss) == one(R)
+        en, hii, h2, ttot, _ = evolve_cell_analytic(
+            rho, e, HII_m, H2I_m, dt, z;
+            hubble=hubble, Om=Om, OL=OL, fh=fh,
+            hubble_expansion=hubble_expansion, adot_over_a=adot_over_a,
+            rate_tables=rate_tables, cool_tables=cool_tables,
+            itcap=itcap, dtfrac=dtfrac)
+        return en, hii, h2, ttot
+    end
+    mh = R(MH)
+    zeroR = zero(R)
+    d = rho / mh
+    z0 = R(z)
+    Hz0 = hubble_z_of(z0; hubble=hubble, Om=Om, OL=OL)
+    Hz_ad = isnan(adot_over_a) ? Hz0 : R(adot_over_a)
+    evolve_z = !isnan(adot_over_a)
+    fhd = R(fh) * d
+
+    yHeI = (one(R) - R(fh)) * d
+    yHII = max(HII_m / mh, zeroR)
+    yH2I = max(H2I_m / mh, zeroR)
+    yHI = max(fhd - yHII - yH2I, zeroR)
+    yde = yHII
+
+    fa = R(f_alpha)
+    Xem = R(Xe_mean)
+    nsm = R(n_sm_cgs)
+    fud = R(fudge)
+    gss = R(gauss)
+    Tc0 = comp2_cmb(z0)
+    c10 = comp1_cmb(z0)
+    f = R(dtfrac)
+    ttot = zero(R)
+    iter = 0
+
+    @inbounds while ttot < dt && iter < itcap
+        iter += 1
+        rem = dt - ttot
+        if evolve_z
+            zt = (one(R) + z0) * exp(-Hz_ad * ttot) - one(R)
+            Tc = comp2_cmb(zt)
+            c1 = comp1_cmb(zt)
+            Hz = hubble_z_of(zt; hubble=hubble, Om=Om, OL=OL)
+        else
+            zt = z0
+            Tc = Tc0
+            c1 = c10
+            Hz = Hz0
+        end
+
+        T = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), zeroR, zeroR, yde,
+                            zeroR, yH2I/R(2), zeroR; gamma=GAMMA_DEFAULT)
+        nHI_eff = n1s_effective(yHI, nsm, Xem, fa, smoothed_is_neutral)
+        if rate_tables === nothing
+            k2v = peebles_k2_mixing(T, yHI, nHI_eff, Hz; fudge=fud, gauss=gss)
+            kb1s = beta1s_freq(Tc) * k2v / (recfast_alpha(T) * R(1.0e6))
+            k1v = k1(T)
+            k7v = k7(T)
+            k8v = k8(T)
+            k9v = k9(T)
+            k10v = k10(T)
+            k15v = k15(T)
+            k22v = k22(T)
+            k57v = k57(T)
+            k58v = k58(T)
+            k27v = k27_cmb(Tc)
+            k28v = k28_cmb(Tc)
+        else
+            K = table_rates_mixing(rate_tables, T, yHI, nHI_eff, Hz, cmb_rates(Tc);
+                                   fudge=fud, gauss=gss)
+            k2v = K.k2
+            kb1s = K.k_beta1s
+            k1v = K.k1
+            k7v = K.k7
+            k8v = K.k8
+            k9v = K.k9
+            k10v = K.k10
+            k15v = K.k15
+            k22v = K.k22
+            k57v = K.k57
+            k58v = K.k58
+            k27v = K.k27
+            k28v = K.k28
+        end
+
+        edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), zero(R), T, zt;
+                            nH=fhd, cool_tables=cool_tables)
+        if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
+            edot = zero(R)
+        end
+        edot_c = -c1 * (T - Tc) * yde
+        edot_rest = edot - edot_c
+        hubble_expansion && (edot_rest -= R(2) * Hz_ad * e * rho)
+        Kc = (e > zeroR && rho > zeroR) ? c1 * yde * (T / e) / rho : zeroR
+        de_rest = edot_rest / rho
+
+        dT = abs(Tc - T)
+        exmax = dT > zeroR ? f*T/dT : one(R)
+        dtc_c = (exmax < one(R) && Kc > zeroR) ? -log(one(R) - exmax)/Kc : typemax(R)
+        dtc = min(_step_f(e, de_rest, f), dtc_c, rem)
+
+        ex = -expm1(-Kc*dtc)
+        g = Kc > zeroR ? ex/Kc : dtc
+        e = e + (e*(Tc/T) - e)*ex + de_rest*g
+        e = max(e, zeroR)
+
+        ion_source = k57v*yHI*yHI + k58v*yHI*yHeI/R(4) + k1v*yHI*yde
+        htot = max(fhd - yH2I, zeroR)
+        yHII = _riccati_linear(yHII, k2v, kb1s, kb1s*htot + ion_source, dtc)
+
+        nHM = _equilibrium_ratio(k7v*yHI*yde, (k8v + k15v)*yHI + k27v)
+        nH2II = _equilibrium_ratio(k9v*yHI*yHII, k10v*yHI + k28v)
+        yH2I += R(2)*(k8v*nHM*yHI + k10v*nH2II*yHI + k22v*yHI*yHI*yHI) * dtc
+
+        yH2I = clamp(yH2I, zeroR, fhd)
+        yHII = clamp(yHII, zeroR, max(fhd - yH2I, zeroR))
+        yHI = max(fhd - yHII - yH2I, zeroR)
+        yde = yHII
+        ttot += dtc
+    end
+
+    return e, yHII*mh, yH2I*mh, ttot
 end
 
 # ── Per-cell mixing subcycler ─────────────────────────────────────────────────
@@ -246,7 +415,7 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
                                     dtfrac::Real = 0.1,
                                     itcap::Int = _SUB_ITMAX) where {SN}
     R    = typeof(e)
-    mh   = R(MH); tiny = R(_SUB_TINY)
+    mh   = R(MH); zeroR = zero(R)
     d    = rho / mh
     Hz   = hubble_z_of(R(z); hubble = hubble, Om = Om, OL = OL)
     Tc   = comp2_cmb(R(z))
@@ -254,20 +423,20 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
     nHe4 = (one(R) - R(fh)) * d                # total He in ×4 (mass-equiv) convention
     nHe  = nHe4 / R(4)                          # total He number density [cm⁻³]
     nH_h = R(fh) * d                            # hydrogen number density [cm⁻³]
-    fHe  = nHe / nH_h                           # n_He/n_H
+    fHe  = nH_h > zeroR ? nHe / nH_h : zeroR    # n_He/n_H
     # He⁺ number density carried as state (HeII_m is the He⁺ MASS density; He mass =
     # 4·m_H, so n(He⁺) = HeII_m/(4·m_H) and yHeII(×4) = HeII_m/m_H).
-    nHeII = helium ? (HeII_m / mh) / R(4) : zero(R)
+    nHeII = helium ? max((HeII_m / mh) / R(4), zeroR) : zeroR
     yHeI  = nHe4                                # neutral-He reservoir for cooling/T
 
-    yHII  = HII_m / mh
-    yH2I  = H2I_m / mh
-    yHDI  = deuterium ? HDI_m / mh : zero(R)
-    yHI   = max((R(fh)*rho - HII_m - H2I_m) / mh, tiny)
+    yHII  = max(HII_m / mh, zeroR)
+    yH2I  = max(H2I_m / mh, zeroR)
+    yHDI  = deuterium ? max(HDI_m / mh, zeroR) : zeroR
+    yHI   = max((R(fh)*rho - HII_m - H2I_m) / mh, zeroR)
     yde   = yHII
-    yHM   = tiny; yH2II = tiny
-    yDI   = deuterium ? R(DTOH_SEED)*yHI  : zero(R)
-    yDII  = deuterium ? R(DTOH_SEED)*yHII : zero(R)
+    yHM   = zeroR; yH2II = zeroR
+    yDI   = deuterium ? R(DTOH_SEED)*yHI  : zeroR
+    yDII  = deuterium ? R(DTOH_SEED)*yHII : zeroR
 
     fa  = R(f_alpha)
     Xem = R(Xe_mean)
@@ -287,7 +456,7 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
         iter += 1
         rem = dt - ttot
 
-        T = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde,
+        T = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), zeroR, zeroR, yde,
                             yHM, yH2I/R(2), yH2II/R(2); gamma = GAMMA_DEFAULT)
         Trad = Tc
 
@@ -309,13 +478,13 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
         nHeII_now = zero(R)
         yHeII_eq  = zero(R); yHeIII_eq = zero(R)
         if uvb_eq
-            ne0 = max(yde, tiny)
+            ne0 = max(yde, zeroR)
             _, nHeII_e, nHeIII_e =
                 helium_equilibrium(K.she1, K.she2, K.k3, K.k4, K.k5, K.k6, ne0, nHe;
                                    GamHeI = gHeI, GamHeII = gHeII)
             yHeII_eq  = R(4) * nHeII_e                 # ×4 mass-equiv convention
             yHeIII_eq = R(4) * nHeIII_e
-            yHeI      = max(nHe4 - yHeII_eq - yHeIII_eq, tiny)
+            yHeI      = max(nHe4 - yHeII_eq - yHeIII_eq, zeroR)
             nHeII_now = nHeII_e
         elseif helium
             nHeII_now = nHeII                          # carried (start-of-substep) He⁺
@@ -336,12 +505,12 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
         end
 
         dedot, HIdot = _de_hi_dot(yHI, yHII, yde, yH2I, yHM, yH2II,
-                                  yHeI, tiny, tiny, K; GamHI = gHI)
+                                  yHeI, zeroR, zeroR, K; GamHI = gHI)
         dtit = min(_step_f(yde, dedot, frac), _step_f(yHI, HIdot, frac), rem, R(0.5)*dt)
 
         edot_c    = -c1 * (T - Tc) * yde
         edot_rest = edot - edot_c
-        Kc        = c1 * yde * (T / e) / rho
+        Kc        = (e > zeroR && rho > zeroR) ? c1 * yde * (T / e) / rho : zeroR
         stiff     = Kc * rem > one(R)
         de_spec   = (stiff ? edot_rest : edot) / rho
         dtit = min(dtit, _step_f(e, de_spec, frac))
@@ -352,28 +521,34 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
         else
             e = e + (edot/rho)*dtit
         end
-        e = max(e, tiny)
+        e = max(e, zeroR)
 
         # ── Helium ionisation (evolved He⁺ with the full He I freeze-out) ─────
         # He³⁺/He²⁺ and the z≳3000 He⁺ plateau are fast ⇒ 3-level Saha (exact).
         # At z≲3000 (He²⁺≈0) He⁺→He⁰ freezes out ⇒ integrate He⁺ with the
         # HyRec He I rate (helium_HeI_rate_AB), backward-Euler.  Carried in nHeII.
         if helium
-            ne = max(yde, tiny)
             if R(z) > R(3000.0)
-                r1 = K.she1 / ne;  r2 = K.she2 / ne
-                den = one(R) + r1 + r1*r2
-                nHeII   = nHe * r1 / den
-                nHeIII  = nHe * r1 * r2 / den
+                # Saha populations expressed as multiplication-only weights.  This
+                # remains finite for an exactly neutral state (ne=0) and for rates
+                # that have physically underflowed to zero.
+                _, nHeII, nHeIII = helium_equilibrium(
+                    K.she1, K.she2, zeroR, one(R), zeroR, one(R), yde, nHe)
             else
-                xHeII = nHeII / nH_h
-                A, B  = helium_HeI_rate_AB(Trad, nH_h, Hz, yHI/nH_h, xHeII, fHe)
-                nHeII = ((xHeII + A*dtit) / (one(R) + B*dtit)) * nH_h
-                nHeIII = nHeII * K.she2 / ne                  # He²⁺ Saha (≈0 here)
+                if nH_h > zeroR
+                    xHeII = nHeII / nH_h
+                    A, B  = helium_HeI_rate_AB(Trad, nH_h, Hz, yHI/nH_h, xHeII, fHe)
+                    nHeII = ((xHeII + A*dtit) / (one(R) + B*dtit)) * nH_h
+                else
+                    nHeII = zeroR
+                end
+                nHeIII = _equilibrium_ratio(nHeII * K.she2, yde) # He²⁺ Saha (≈0 here)
             end
+            nHeIII = clamp(nHeIII, zeroR, max(nHe - nHeII, zeroR))
+            nHeII = clamp(nHeII, zeroR, max(nHe - nHeIII, zeroR))
             yHeII_x  = R(4) * nHeII                            # ×4 mass-equiv convention
             yHeIII_x = R(4) * nHeIII
-            yHeI     = max(nHe4 - yHeII_x - yHeIII_x, tiny)   # for next substep's cooling/T
+            yHeI     = max(nHe4 - yHeII_x - yHeIII_x, zeroR)  # for next substep's cooling/T
             s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
                              yHeII_in = yHeII_x, yHeIII_in = yHeIII_x, GamHI = gHI)
@@ -398,8 +573,13 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
         # `make_consistent` step.  nₑ is re-derived from charge balance next substep.
         if uvb
             SH = yHI + yHII + yH2I + yHM + yH2II
-            fH = (R(fh) * d) / max(SH, tiny)
-            yHI *= fH; yHII *= fH; yH2I *= fH; yHM *= fH; yH2II *= fH
+            if SH > zeroR
+                fH = (R(fh) * d) / SH
+                yHI *= fH; yHII *= fH; yH2I *= fH; yHM *= fH; yH2II *= fH
+            else
+                yHI = R(fh) * d
+                yHII = zeroR; yH2I = zeroR; yHM = zeroR; yH2II = zeroR
+            end
         end
 
         ttot += dtit
@@ -410,6 +590,33 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
 end
 
 # ── KA kernel ────────────────────────────────────────────────────────────────
+
+@kernel function _evolve_analytic_mixing_k!(e, HII, H2I, @Const(rho), @Const(n_sm),
+                                            nsm_scalar, du, vu2, tu, dt, z,
+                                            f_alpha, Xe_mean, fudge, gauss,
+                                            hubble, Om, OL, fh, hub_exp, aoa,
+                                            rate_tables, cool_tables, dtfrac, itcap,
+                                            ::Val{NS}, ::Val{SN}) where {NS,SN}
+    i = @index(Global)
+    @inbounds begin
+        T = eltype(e)
+        nsm_code = NS ? T(nsm_scalar) : n_sm[i]
+        # SN=false carries smoothed baryon mass; SN=true carries neutral-H mass.
+        nsm_h = nsm_code * du * (SN ? one(T) : T(fh)) / T(MH)
+        en, hii, h2, _ = evolve_cell_analytic_mixing(
+            rho[i] * du, e[i] * vu2, HII[i] * du, H2I[i] * du,
+            nsm_h, dt * tu, z;
+            f_alpha=T(f_alpha), Xe_mean=T(Xe_mean),
+            smoothed_is_neutral=Val(SN), fudge=T(fudge), gauss=T(gauss),
+            hubble=T(hubble), Om=T(Om), OL=T(OL), fh=T(fh),
+            hubble_expansion=hub_exp, adot_over_a=T(aoa),
+            rate_tables=rate_tables, cool_tables=cool_tables,
+            dtfrac=T(dtfrac), itcap=itcap)
+        e[i] = en / vu2
+        HII[i] = hii / du
+        H2I[i] = h2 / du
+    end
+end
 
 @kernel function _evolve_mixing_k!(e, HII, H2I, HDI, HeII, @Const(rho), @Const(n_sm),
                                    du, vu2, tu, dt, z,
@@ -569,6 +776,7 @@ function solve_chem_mixing!(rho::AbstractVector, e_int::AbstractVector,
 
     P   = precision
     be  = ChemistryKernels.backend(backend)
+    rate_tables = _resolve_rate_tables(backend, P, rate_tables)
     du  = P(density_units)
     vu2 = P((length_units / time_units)^2)
     tu  = P(time_units)
@@ -658,6 +866,7 @@ function solve_chem_mixing_device!(rho, e_int, HII, H2I, n_smoothed;
 
     P = precision
     be = ChemistryKernels.backend(backend)
+    rate_tables = _resolve_rate_tables(backend, P, rate_tables)
     du = P(density_units)
     vu2 = P((length_units / time_units)^2)
     tu = P(time_units)
@@ -674,6 +883,123 @@ function solve_chem_mixing_device!(rho, e_int, HII, H2I, n_smoothed;
        P(hubble), P(Om), P(OL), P(fh), hubble_expansion,
        rate_tables, P(dtfrac), itcap,
        Val(scalar_nsm), Val(smoothed_is_neutral); ndrange = n)
+    KA.synchronize(be)
+    return nothing
+end
+
+"""
+    solve_chem_analytic_mixing!(rho, e_int, HII, H2I, n_smoothed; ...)
+
+Host-array entry point for the fast analytic Ly-alpha mixing solver. State is
+copied to the selected backend, advanced in one allocation-free device kernel,
+and copied back. Use [`solve_chem_analytic_mixing_device!`](@ref) when the state
+already resides on the device.
+"""
+function solve_chem_analytic_mixing!(rho, e_int, HII, H2I, n_smoothed;
+                                     a_value::Real, dt::Real,
+                                     density_units::Real, length_units::Real,
+                                     time_units::Real,
+                                     f_alpha::Real = 0.0,
+                                     Xe_mean::Real = 0.0,
+                                     smoothed_is_neutral::Bool = false,
+                                     recfast_fudge::Real = 1.0,
+                                     recfast_hswitch::Bool = false,
+                                     hubble_expansion::Bool = false,
+                                     adot_over_a::Real = NaN,
+                                     hubble::Real = 71.0, Om::Real = 0.27,
+                                     OL::Real = 0.73, fh::Real = 0.76,
+                                     rate_tables = nothing,
+                                     cool_tables = nothing,
+                                     dtfrac::Real = 0.1,
+                                     itcap::Int = _SUB_ITMAX,
+                                     workgroup_size::Int = 0,
+                                     backend::Symbol = :cpu,
+                                     precision::Type = Float64)
+    n = length(rho)
+    @assert length(e_int) == n && length(HII) == n && length(H2I) == n
+    scalar_nsm = n_smoothed isa Real
+    scalar_nsm || @assert length(n_smoothed) == n
+
+    P = precision
+    be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
+    d_rho = to_device(be, collect(rho), P)
+    d_e = to_device(be, collect(e_int), P)
+    d_HII = to_device(be, collect(HII), P)
+    d_H2I = to_device(be, collect(H2I), P)
+    d_nsm = scalar_nsm ? d_rho : to_device(be, collect(n_smoothed), P)
+    rt = rate_tables === nothing ? nothing : rate_tables
+    ct = cool_tables === nothing ? nothing : cool_tables
+
+    solve_chem_analytic_mixing_device!(d_rho, d_e, d_HII, d_H2I,
+                                       scalar_nsm ? P(n_smoothed) : d_nsm;
+        a_value=a_value, dt=dt, density_units=density_units,
+        length_units=length_units, time_units=time_units,
+        f_alpha=f_alpha, Xe_mean=Xe_mean,
+        smoothed_is_neutral=smoothed_is_neutral,
+        recfast_fudge=recfast_fudge, recfast_hswitch=recfast_hswitch,
+        hubble_expansion=hubble_expansion, adot_over_a=adot_over_a,
+        hubble=hubble, Om=Om, OL=OL, fh=fh,
+        rate_tables=rt, cool_tables=ct, dtfrac=dtfrac, itcap=itcap,
+        workgroup_size=workgroup_size, backend=backend, precision=P)
+
+    e_int .= to_host(d_e)
+    HII .= to_host(d_HII)
+    H2I .= to_host(d_H2I)
+    return nothing
+end
+
+"""
+    solve_chem_analytic_mixing_device!(rho, e_int, HII, H2I, n_smoothed; ...)
+
+Zero-copy device entry point for analytic primordial H/H2 chemistry with a
+smoothed neutral-density field in the Peebles C-factor. All state arrays are
+updated in place. `n_smoothed` may be a device vector or a scalar code density.
+"""
+function solve_chem_analytic_mixing_device!(rho, e_int, HII, H2I, n_smoothed;
+                                            a_value::Real, dt::Real,
+                                            density_units::Real, length_units::Real,
+                                            time_units::Real,
+                                            f_alpha::Real = 0.0,
+                                            Xe_mean::Real = 0.0,
+                                            smoothed_is_neutral::Bool = false,
+                                            recfast_fudge::Real = 1.0,
+                                            recfast_hswitch::Bool = false,
+                                            hubble_expansion::Bool = false,
+                                            adot_over_a::Real = NaN,
+                                            hubble::Real = 71.0, Om::Real = 0.27,
+                                            OL::Real = 0.73, fh::Real = 0.76,
+                                            rate_tables = nothing,
+                                            cool_tables = nothing,
+                                            dtfrac::Real = 0.1,
+                                            itcap::Int = _SUB_ITMAX,
+                                            workgroup_size::Int = 0,
+                                            backend::Symbol = :cuda,
+                                            precision::Type = Float32)
+    n = length(rho)
+    @assert length(e_int) == n && length(HII) == n && length(H2I) == n
+    scalar_nsm = n_smoothed isa Real
+    scalar_nsm || @assert length(n_smoothed) == n
+
+    P = precision
+    be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
+    du = P(density_units)
+    vu2 = P((length_units / time_units)^2)
+    tu = P(time_units)
+    z = P(1.0 / a_value - 1.0)
+    fudge = P(recfast_hswitch ? _RECFAST_V2_FUDGE : recfast_fudge)
+    gauss = P(recfast_hswitch ? recfast_gauss_factor(Float64(z)) : 1.0)
+    nsm_arg = scalar_nsm ? rho : n_smoothed
+    nsm_scalar = scalar_nsm ? P(n_smoothed) : zero(P)
+    k! = workgroup_size > 0 ?
+         _evolve_analytic_mixing_k!(be, workgroup_size) :
+         _evolve_analytic_mixing_k!(be)
+    k!(e_int, HII, H2I, rho, nsm_arg, nsm_scalar,
+       du, vu2, tu, P(dt), z, P(f_alpha), P(Xe_mean), fudge, gauss,
+       P(hubble), P(Om), P(OL), P(fh), hubble_expansion, P(adot_over_a),
+       rate_tables, cool_tables, P(dtfrac), itcap,
+       Val(scalar_nsm), Val(smoothed_is_neutral); ndrange=n)
     KA.synchronize(be)
     return nothing
 end

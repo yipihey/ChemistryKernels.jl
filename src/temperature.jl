@@ -39,6 +39,11 @@ network. Pure.
     nH2tot  = nH2 + nH2II
     n_tot   = n_no_h2 + nH2tot
 
+    # An empty/invalid thermodynamic state has no defined mean molecular weight.
+    # Return the documented temperature floor instead of forming 0/0; production
+    # callers have rho>0 and at least one conserved species.
+    (rho > zero(R) && n_tot > zero(R)) || return R(MIN_TEMPERATURE)
+
     P    = gm1 * rho * eint                        # raw pressure [erg/cm³]
     Traw = P / (kB * n_tot)                        # utem·P_code/nd_code, CGS form
     temp = clamp(Traw, one(R), R(1.0e9))           # [1 K, 1e9 K]: the upper cap
@@ -49,7 +54,7 @@ network. Pure.
 
     # GammaH2Inverse: 0.5*5 unless there's a reasonable amount of H2.
     GammaH2Inv = R(0.5) * R(5)
-    if nH2tot / n_no_h2 > R(1.0e-3)
+    if nH2tot > R(1.0e-3) * n_no_h2
         x = R(6100.0) / temp
         if x < R(10.0)
             ex = exp(x)
@@ -68,20 +73,20 @@ end
 
 Temperature for the v2026 reduced network straight from the advected fields
 (physical CGS): reconstruct HI = fh·ρ − HII − H2I, helium all neutral, nₑ = n_HII,
-H⁻/H2⁺ = the floor value — the reduced-network reconstruction — then
+H⁻/H2⁺ = zero — the reduced-network reconstruction — then
 `gas_temperature`. Deuterium is ignored (the temperature relation ignores D). Pure.
 """
 @inline function temperature_from_reduced(rho, eint, HIImass, H2Imass;
                                           fh = FH_DEFAULT, gamma = GAMMA_DEFAULT)
     R    = typeof(eint)
     mh   = R(MH)
-    tiny = R(TINY)
+    z = zero(R)
     nHII = HIImass / mh
     nH2  = H2Imass / (R(2) * mh)                   # H2I is the H2 MASS density
-    nHI  = max((R(fh) * rho - HIImass - H2Imass) / mh, tiny)
+    nHI  = max((R(fh) * rho - HIImass - H2Imass) / mh, z)
     nHeI = (one(R) - R(fh)) * rho / (R(4) * mh)
-    return gas_temperature(rho, eint, nHI, nHII, nHeI, tiny, tiny, nHII,
-                           tiny, nH2, tiny; gamma = gamma)
+    return gas_temperature(rho, eint, nHI, nHII, nHeI, z, z, nHII,
+                           z, nH2, z; gamma = gamma)
 end
 
 # ── device launcher (mirrors @scalarkernel; reconstructs + computes per cell) ──

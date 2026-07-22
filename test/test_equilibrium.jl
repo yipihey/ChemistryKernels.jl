@@ -1,5 +1,5 @@
 using ChemistryKernels, Test
-using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII
+using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII, helium_equilibrium
 
 # equilibrium.jl carries no closed-form grackle oracle (HM/H2II/DII are scratch in
 # the reduced run).  The transcription risk is purely STRUCTURAL — which rates,
@@ -51,4 +51,12 @@ using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII
     # photo-destruction (k27) must increase H⁻ destruction ⇒ lower HM
     HM_nocmb = equilibrium_HM(yHI, yHII, yde, yH2II, k7,k8,k14,k15,k16,k17,k19, 0.0)
     @test HM_nocmb > HMjl
+
+    # Disconnected exact-zero networks are valid equilibria, not 0/0 failures.
+    @test equilibrium_HM(0.7, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 8)...) == 0.0
+    @test equilibrium_H2II(0.7, 0.0, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 7)...) == 0.0
+    @test equilibrium_DII(0.0, 0.0, 0.7, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 6)...) == 0.0
+    he0 = helium_equilibrium(0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.08)
+    @test he0 == (0.08, 0.0, 0.0)
+    @test all(isfinite, he0)
 end

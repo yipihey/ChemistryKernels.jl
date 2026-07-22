@@ -10,6 +10,7 @@
 #   6. throughput          — mixing kernel within 2× of bare solve_chem!.
 
 using ChemistryKernels
+using EmissionKernels
 using Test
 using Printf
 
@@ -45,9 +46,12 @@ include("recomb_helpers.jl")
                        density_units=1.0, length_units=1.0, time_units=1.0,
                        fa_table=FA_ZERO)
 
-    @test e2   == e1
-    @test HII2 == HII1
-    @test H2I2 == H2I1
+    # The zero-state chemistry no longer seeds hidden intermediaries with a
+    # numerical floor. The two paths remain roundoff-equivalent, but H2 can
+    # differ by a few parts in 1e9 because the old tiny seed is now exactly zero.
+    @test e2   ≈ e1 rtol=16eps(Float64)
+    @test HII2 ≈ HII1 rtol=16eps(Float64)
+    @test H2I2 ≈ H2I1 rtol=1e-8
 
     # Part B: one-zone z=5000→200 gives a physically reasonable recombination history.
     z_arr, xe_arr, _ = integrate_onezone(z_start=5000.0, z_end=200.0, n_steps=500)
@@ -139,6 +143,95 @@ end
     end
 end
 
+@testset "analytic_mixing fast path" begin
+    n = 32
+    z = 1100.0f0
+    a = 1.0f0 / (1.0f0 + z)
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho0 = nH * Float32(ChemistryKernels.MH) / 0.76f0
+    hii0 = 0.8f0 * nH * Float32(ChemistryKernels.MH)
+    e0 = Float32(e_from_T(3000.0, 0.8, Float64(rho0)))
+    rho = Float32[rho0 * (1.0f0 + 0.25f0 * sin(2f0*pi*Float32(i-1)/Float32(n))) for i in 1:n]
+    hii = Float32[0.8f0 * 0.76f0 * r for r in rho]
+    e = fill(e0, n)
+    h2 = fill(1.0f-35, n)
+    nsm_local = copy(rho)
+    nsm_mean = fill(sum(rho) / n, n)
+
+    e_ref = copy(e); hii_ref = copy(hii); h2_ref = copy(h2)
+    solve_chem_analytic!(rho, e_ref, hii_ref, h2_ref;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        backend=:cpu, precision=Float32)
+
+    e_nomix = copy(e); hii_nomix = copy(hii); h2_nomix = copy(h2)
+    solve_chem_analytic_mixing_device!(rho, e_nomix, hii_nomix, h2_nomix, nsm_local;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=0, Xe_mean=0.8, recfast_hswitch=false,
+        backend=:cpu, precision=Float32)
+    @test e_nomix == e_ref
+    @test hii_nomix == hii_ref
+    @test h2_nomix == h2_ref
+
+    # GPU backends default to the cached production tables. Use the same Float32
+    # tables for the CPU parity reference; the analytic-reference contract is
+    # exercised independently above by the f_alpha=0 identity check.
+    rt_fast = build_rate_tables(; backend=:cpu, precision=Float32)
+    ct_fast = EmissionKernels.build_cooling_tables(; backend=:cpu, precision=Float32)
+    e_fast = copy(e); hii_fast = copy(hii); h2_fast = copy(h2)
+    solve_chem_analytic_mixing_device!(rho, e_fast, hii_fast, h2_fast, nsm_mean;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0.8, rate_tables=rt_fast, cool_tables=ct_fast,
+        backend=:cpu, precision=Float32)
+
+    e_full = copy(e); hii_full = copy(hii); h2_full = copy(h2)
+    solve_chem_mixing_device!(rho, e_full, hii_full, h2_full, nsm_mean;
+        a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+        f_alpha=1, Xe_mean=0.8, backend=:cpu, precision=Float32)
+    @test all(isfinite, e_fast)
+    @test all(isfinite, hii_fast)
+    @test maximum(abs.(hii_fast .- hii_nomix)) > 0
+    @test isapprox(hii_fast, hii_full; rtol=5.0f-2)
+    @test isapprox(e_fast, e_full; rtol=1.0f-1)
+
+    if ChemistryKernels.has_backend(:metal)
+        be = ChemistryKernels.backend(:metal)
+        d_rho = ChemistryKernels.to_device(be, rho, Float32)
+        d_e = ChemistryKernels.to_device(be, copy(e), Float32)
+        d_hii = ChemistryKernels.to_device(be, copy(hii), Float32)
+        d_h2 = ChemistryKernels.to_device(be, copy(h2), Float32)
+        d_nsm = ChemistryKernels.to_device(be, nsm_mean, Float32)
+        solve_chem_analytic_mixing_device!(d_rho, d_e, d_hii, d_h2, d_nsm;
+            a_value=a, dt=1.0f12, density_units=1, length_units=1, time_units=1,
+            f_alpha=1, Xe_mean=0.8, backend=:metal, precision=Float32)
+        @test isapprox(ChemistryKernels.to_host(d_e), e_fast; rtol=5.0f-4)
+        @test isapprox(ChemistryKernels.to_host(d_hii), hii_fast; rtol=5.0f-4)
+        @test isapprox(ChemistryKernels.to_host(d_h2), h2_fast; rtol=5.0f-4)
+    end
+end
+
+@testset "Float32 high-z Riccati equilibrium" begin
+    # At high redshift beta*nHI and beta*xHII nearly cancel.  The positive
+    # quadratic root must not lose that equilibrium to Float32 cancellation.
+    for z in (3000.0, 2800.0, 2600.0, 2500.0, 2400.0, 2200.0, 2000.0)
+        nH = n_H_at_z(z)
+        T = 2.725 * (1 + z)
+        Hz = _Hz(z)
+        nHI = 0.1 * nH
+        k2 = peebles_k2_mixing(T, nHI, nHI, Hz;
+                               fudge=1.125, gauss=recfast_gauss_factor(z))
+        beta = beta1s_freq(T) * k2 / (recfast_alpha(T) * 1.0e6)
+        source = beta * nH
+        dt = 1.0e12
+        y0 = 0.9 * nH
+        y64 = ChemistryKernels._riccati_linear(y0, k2, beta, source, dt)
+        y32 = ChemistryKernels._riccati_linear(Float32(y0), Float32(k2),
+                                                Float32(beta), Float32(source),
+                                                Float32(dt))
+        @test isapprox(Float64(y32 / Float32(nH)), y64 / nH; rtol=2e-5)
+        @test 0.9 <= y32 / Float32(nH) <= 1.01
+    end
+end
+
 @testset "saha_highz" begin
     # At z≥4500 the H ionisation fraction should track Saha equilibrium to within 2%.
     # β₁s (CMB photoionisation of H(1s)) maintains detailed balance at high T, so
@@ -190,13 +283,19 @@ end
 
     z_arr, xe_arr, _ = integrate_onezone(z_start=2500.0, z_end=500.0,
                                           n_steps=800, fa_table=fa_bump)
-    # Finite-difference |dx_e/dz|; no step should be > 100× the median.
-    # (The Saha→Peebles freeze-out transition at z≈1200 produces a ~80-90× spike.)
+    # Finite-difference |dx_e/dz|. The physical recombination peak near z≈1304 is
+    # much larger than the late-time median, so a global peak/median ratio does not
+    # diagnose continuity. Test the left/right derivative directly at every f_α knot.
     dxe = abs.(diff(xe_arr))
     dz  = abs.(diff(z_arr))
     rate = dxe ./ max.(dz, 1e-10)
-    med  = sort(rate)[length(rate) ÷ 2]
-    @test maximum(rate) < 100 * max(med, 1e-30)
+    for knot in (600.0, 800.0, 1000.0, 1100.0, 1300.0, 1600.0, 1900.0)
+        j = argmin(abs.(z_arr .- knot))
+        left = rate[max(j-1, 1)]
+        right = rate[min(j, length(rate))]
+        @test abs(left-right) / max(left, right, 1e-30) < 0.20
+    end
+    @test maximum(rate) < 3e-3
 end
 
 @testset "sinusoidal_density" begin

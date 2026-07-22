@@ -20,8 +20,7 @@
 
 export equilibrium_HM, equilibrium_H2II, equilibrium_DII, helium_equilibrium
 
-# A scale-free tiny floor mirroring the Fortran `tiny` guard on the denominator.
-const _EQ_TINY = 1.0e-20
+@inline _equilibrium_ratio(num, den) = den > zero(den) ? num / den : zero(num)
 
 """
     equilibrium_HM(yHI, yHII, yde, yH2II, k7, k8, k14, k15, k16, k17, k19, k27)
@@ -36,7 +35,7 @@ Pure.
     scoef = k7 * yHI * yde
     acoef = (k8 + k15) * yHI + (k16 + k17) * yHII +
             k14 * yde + k19 * yH2II / R(2) + k27
-    return scoef / max(acoef, R(_EQ_TINY))
+    return _equilibrium_ratio(scoef, acoef)
 end
 
 """
@@ -56,7 +55,7 @@ k28 is the CMB photodissociation; k29 (LW, numerator) and k30 default to 0. Pure
     num = R(2) * (k9 * yHI * yHII + k11 * yH2I / R(2) * yHII +
                   k17 * yHM * yHII + k29 * yH2I)
     den = k10 * yHI + k18 * yde + k19 * yHM + (k28 + k30)
-    return num / max(den, R(_EQ_TINY))
+    return _equilibrium_ratio(num, den)
 end
 
 """
@@ -75,7 +74,7 @@ k24 is D photo-ionization (0 without radiation). Pure.
     scoef = k1 * yDI * yde + k50 * yHII * yDI +
             R(2) * k53 * yHII * yHDI / R(3) + k24 * yDI
     acoef = k2 * yde + k51 * yHI + k52 * yH2I / R(2)
-    return scoef / max(acoef, R(_EQ_TINY))
+    return _equilibrium_ratio(scoef, acoef)
 end
 
 """
@@ -101,10 +100,25 @@ Returns number densities (same units as `nHe`), summing to `nHe`. Pure.
 @inline function helium_equilibrium(she1, she2, k3, k4, k5, k6, ne, nHe;
                                     GamHeI = 0.0, GamHeII = 0.0)
     R   = typeof(nHe)
-    nes = max(R(ne), R(_EQ_TINY))
-    k4s = max(R(k4), R(_EQ_TINY));  k6s = max(R(k6), R(_EQ_TINY))
-    r1  = R(she1)/nes + R(k3)/k4s + R(GamHeI) /(k4s*nes)   # n_HeII /n_HeI
-    r2  = R(she2)/nes + R(k5)/k6s + R(GamHeII)/(k6s*nes)   # n_HeIII/n_HeII
-    den = one(R) + r1 + r1 * r2
-    return nHe/den, nHe*r1/den, nHe*r1*r2/den
+    nes = max(R(ne), zero(R))
+    # Write the two successive ionisation balances without dividing by ne or a
+    # recombination coefficient.  Scaling each up/down pair independently leaves
+    # the final three population weights unchanged and prevents overflow.
+    u1 = max(R(she1)*R(k4) + R(k3)*nes + R(GamHeI), zero(R))
+    d1 = max(R(k4)*nes, zero(R))
+    u2 = max(R(she2)*R(k6) + R(k5)*nes + R(GamHeII), zero(R))
+    d2 = max(R(k6)*nes, zero(R))
+    s1 = max(u1, d1)
+    s1 > zero(R) || return nHe, zero(R), zero(R)
+    u1 /= s1; d1 /= s1
+    s2 = max(u2, d2)
+    if s2 <= zero(R)
+        den = u1 + d1
+        return nHe*d1/den, nHe*u1/den, zero(R)
+    end
+    u2 /= s2; d2 /= s2
+    w0 = d1*d2; w1 = u1*d2; w2 = u1*u2
+    den = w0 + w1 + w2
+    den > zero(R) || return nHe, zero(R), zero(R)
+    return nHe*w0/den, nHe*w1/den, nHe*w2/den
 end
