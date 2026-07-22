@@ -35,7 +35,9 @@ if (!response.ok) {
 
 let html = await response.text();
 html = html.replaceAll(`${origin}/`, `${origin}${basePath}/`);
-html = html.replace(/(["'])\/(?!\/)/g, `$1${basePath}/`);
+// Rewrite quoted root-relative URLs, but not the `"/>` sequence that closes
+// self-closing HTML tags.
+html = html.replace(/(["'])\/(?=[A-Za-z0-9_.~-])/g, `$1${basePath}/`);
 
 await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });

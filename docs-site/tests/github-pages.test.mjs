@@ -12,6 +12,7 @@ test("exports a repository-subpath-safe GitHub Pages site", async () => {
   assert.match(html, /(?:href|src)="\/ChemistryKernels\.jl\/assets\//);
   assert.match(html, /https:\/\/yipihey\.github\.io\/ChemistryKernels\.jl\/og\.png/);
   assert.doesNotMatch(html, /(?:href|src)="\/assets\//);
+  assert.doesNotMatch(html, /\/ChemistryKernels\.jl\/>/);
 
   const assetPaths = [...html.matchAll(/(?:href|src)="\/ChemistryKernels\.jl\/(assets\/[^"?#]+)/g)]
     .map((match) => match[1]);
