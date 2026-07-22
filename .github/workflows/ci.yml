@@ -13,6 +13,11 @@ jobs:
         os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout EmissionKernels
+        uses: actions/checkout@v6
+        with:
+          repository: yipihey/EmissionKernels.jl
+          path: EmissionKernels.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.julia-version }}
@@ -22,7 +27,7 @@ jobs:
         run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
       # Dedicated test env with a path [sources] back to this package (repo convention).
       - name: Instantiate test env
-        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+        run: julia --project=test -e 'using Pkg; Pkg.develop(path="EmissionKernels.jl"); Pkg.instantiate()'
       - name: Run tests (table-free suites; grackle-oracle suites are macOS-gated)
         run: julia --project=test test/runtests.jl
 
@@ -31,6 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout EmissionKernels
+        uses: actions/checkout@v6
+        with:
+          repository: yipihey/EmissionKernels.jl
+          path: EmissionKernels.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -43,7 +53,7 @@ jobs:
       - name: Add registries
         run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
       - name: Instantiate Julia test environment
-        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+        run: julia --project=test -e 'using Pkg; Pkg.develop(path="EmissionKernels.jl"); Pkg.instantiate()'
       - name: Install site dependencies
         working-directory: docs-site
         run: npm ci

@@ -18,6 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Checkout EmissionKernels
+        uses: actions/checkout@v6
+        with:
+          repository: yipihey/EmissionKernels.jl
+          path: EmissionKernels.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -30,7 +35,7 @@ jobs:
       - name: Add Julia registries
         run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/yipihey/VespaRegistry"))'
       - name: Instantiate Julia environment
-        run: julia --project=test -e 'using Pkg; Pkg.instantiate()'
+        run: julia --project=test -e 'using Pkg; Pkg.develop(path="EmissionKernels.jl"); Pkg.instantiate()'
       - name: Install site dependencies
         working-directory: docs-site
         run: npm ci
