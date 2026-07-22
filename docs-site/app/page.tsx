@@ -25,11 +25,6 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
   const [width, setWidth] = useState(760);
 
   useEffect(() => {
-    setHidden(new Set());
-    setHover(null);
-  }, [data.id]);
-
-  useEffect(() => {
     const node = wrapRef.current;
     if (!node) return;
     const observer = new ResizeObserver(([entry]) => setWidth(Math.max(320, entry.contentRect.width)));
@@ -47,6 +42,10 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
     const xmin = Math.min(...xs), xmax = Math.max(...xs);
     let ymin = Math.min(...ys), ymax = Math.max(...ys);
     if (!Number.isFinite(ymin) || !Number.isFinite(ymax)) { ymin = 1e-30; ymax = 1; }
+    if (data.yFloor !== undefined) {
+      ymin = Math.max(ymin, data.yFloor);
+      ymax = Math.max(ymax, data.yFloor * 10);
+    }
     if (ymin === ymax) { ymin /= 10; ymax *= 10; }
     return { xmin, xmax, ymin, ymax };
   }, [data, hidden]);
@@ -106,7 +105,7 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
         if (v === null || v <= 0 || !Number.isFinite(v) || (data.xScale === "log" && xv <= 0)) {
           started = false; return;
         }
-        const px = X(xv), py = Y(v);
+        const px = X(xv), py = Y(Math.max(v, bounds.ymin));
         if (!started) { c.moveTo(px, py); started = true; } else c.lineTo(px, py);
       });
       c.stroke();
@@ -152,7 +151,9 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
       <div className="plot-legend" aria-label="Toggle chart series">
         {data.series.map((s, i) => (
           <button key={s.name} className={hidden.has(i) ? "is-hidden" : ""} onClick={() => {
-            const next = new Set(hidden); next.has(i) ? next.delete(i) : next.add(i); setHidden(next);
+            const next = new Set(hidden);
+            if (next.has(i)) next.delete(i); else next.add(i);
+            setHidden(next);
           }} title={s.note || `Toggle ${s.name}`}>
             <i style={{ background: COLORS[i % COLORS.length] }} />{s.name}
           </button>
@@ -203,6 +204,35 @@ solve_chem_mixing!(rho, e, HII, H2I, rho_smoothed;
     recfast_hswitch=true,
     smoothed_is_neutral=false)`;
 
+const cAbiStart = `/* Illustrative stable ABI implemented by a thin Julia @ccallable wrapper. */
+typedef struct {
+    double density_units, length_units, time_units, a_value;
+} ck_units;
+
+int ck_solve_h_h2_f32(size_t n,
+    const float *rho, float *e, float *HII, float *H2I,
+    double dt, const ck_units *units);
+
+/* Initialize the bundled Julia runtime once per process, then pass the host's
+   contiguous field storage directly: the wrapper uses unsafe_wrap, without copying. */`;
+
+const fortranStart = `use, intrinsic :: iso_c_binding
+type, bind(C) :: ck_units
+  real(c_double) :: density_units, length_units, time_units, a_value
+end type
+interface
+  function ck_solve_h_h2_f32(n, rho, e, HII, H2I, dt, units) &
+      bind(C, name="ck_solve_h_h2_f32") result(ierr)
+    import :: c_size_t, c_float, c_double, c_int, ck_units
+    integer(c_size_t), value :: n
+    real(c_float), intent(in)    :: rho(*)
+    real(c_float), intent(inout) :: e(*), HII(*), H2I(*)
+    real(c_double), value :: dt
+    type(ck_units), intent(in) :: units
+    integer(c_int) :: ierr
+  end function
+end interface`;
+
 export default function Home() {
   const [datasetId, setDatasetId] = useState("atomic-rates");
   const dataset = scienceDatasets.find((d) => d.id === datasetId) ?? scienceDatasets[0];
@@ -213,7 +243,7 @@ export default function Home() {
         <a className="wordmark" href="#top"><span>CK</span>ChemistryKernels.jl</a>
         <nav aria-label="Primary navigation">
           <a href="#motivation">Motivation</a><a href="#physics">Physics</a><a href="#solver">Solver</a><a href="#rates">Rate atlas</a>
-          <a href="#recombination">Recombination</a><a href="#usage">Usage</a><a href="#references">References</a>
+          <a href="#recombination">Recombination</a><a href="#usage">Usage</a><a href="#integration">C / Fortran</a><a href="#references">References</a>
         </nav>
         <a className="github-link" href="https://github.com/yipihey/ChemistryKernels.jl">Source ↗</a>
       </header>
@@ -328,13 +358,23 @@ export default function Home() {
           <article><span className="overline">Compton split</span><div className="equation">de/dt = −K<sub>C</sub>(e − e<sub>CMB</sub>) + q̇<sub>rest</sub></div><p>When K<sub>C</sub>Δt &gt; 1, the stiff CMB exchange is integrated implicitly in the full solver. The analytic solver uses the exponential solution, so Compton locking does not dictate the step.</p></article>
         </div>
         <div className="fast-panel">
-          <div className="fast-title"><span>FAST ANALYTIC PATH</span><h3>Three exact updates. One deliberately smaller physics envelope.</h3><p><code>evolve_cell_analytic</code> is for primordial H + H₂ where deuterium, dust, metals, and fully active high-temperature H₂ destruction are not required.</p></div>
+          <div className="fast-title"><span>FAST ANALYTIC PATH</span><h3>Closed forms inside a deliberately smaller physics envelope.</h3><p><code>evolve_cell_analytic</code> advances primordial H + H₂. It assumes cell density and external radiation are fixed during each chemistry call, reconstructs H I and electrons by conservation, and closes H⁻/H₂⁺ in instantaneous quasi-steady state.</p></div>
           <div className="fast-steps">
-            <div><b>A</b><h4>Energy</h4><p>Analytic exponential relaxation toward T<sub>CMB</sub>, plus explicit non-Compton cooling quadrature.</p></div>
-            <div><b>B</b><h4>Ionization</h4><p>Exact Riccati solution for recombination, CMB photoionization, and the collisional ionization floor.</p></div>
-            <div><b>C</b><h4>Molecules</h4><p>Closed H⁻ and H₂⁺ equilibria feed an H₂ formation quadrature; formation dominates below ≈10⁴ K.</p></div>
+            <div><b>A</b><h4>Energy</h4><p>Compton exchange is an exact exponential. Non-Compton cooling is frozen over the substep and integrated as a source; only that source and the Compton transition limit the step.</p></div>
+            <div><b>B</b><h4>Ionization</h4><p>An exact linear-source Riccati update balances case-B/Peebles recombination against CMB photoionization, electron impact, and H–H/H–He ionization.</p></div>
+            <div><b>C</b><h4>Molecules</h4><p>H⁻ and H₂⁺ are algebraic. H₂ formation integrates H I depletion analytically, then a backward-Euler sink applies H/H⁺/e⁻ collisional dissociation.</p></div>
           </div>
-          <div className="fast-foot"><span><b>Use it for</b> recombination-era volumes, primordial IGM, first cooling halos</span><span><b>Fall back for</b> shocks with H₂ destruction, HD, dust, metals, general UVB</span></div>
+          <div className="fast-foot"><span><b>Use it for</b> recombination-era volumes, primordial IGM, and the H₂-cooled minihalo envelope</span><span><b>Use the full path for</b> HD, dust, metals, UVB heating, and strongly non-equilibrium shocks or dense cores</span></div>
+        </div>
+        <div className="analytic-contract">
+          <div className="analytic-assumptions"><span className="overline">MODEL ASSUMPTIONS</span><h3>What “analytic” does—and does not—mean</h3><ul><li>The rate coefficients are held at the substep state; the species updates themselves are closed form.</li><li>Charge neutrality supplies n<sub>e</sub>. Helium is neutral in cold collapse, stateless Saha in hot gas, or an explicitly carried He II abundance in the high-z path.</li><li>H⁻ and H₂⁺ must remain faster than the resolved H II/H₂ evolution. The path is not a non-equilibrium intermediate-species solver.</li><li><code>dtfrac</code> controls thermal/rate re-evaluation accuracy, not stability of the Riccati or Compton solutions.</li></ul><a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl">Read the closed-form kernel ↗</a></div>
+          <div className="analytic-table-wrap"><table className="analytic-table"><thead><tr><th>Path</th><th>Measured envelope</th><th>Interpretation</th></tr></thead><tbody>
+            <tr><td><code>analytic!</code></td><td>Mean IGM, z=1200→20</td><td>At z=20: H II and energy within 5% of the full network; H₂ within a factor of three.</td></tr>
+            <tr><td><code>analytic!</code></td><td>z=25 collapse, n<sub>H</sub> to 10⁴ cm⁻³</td><td>H II within 5%, H₂ within 25%, and a 60–200 K terminal-temperature gate.</td></tr>
+            <tr><td><code>analytic!</code> + RECFAST-v2</td><td>z=900–1300</td><td>&lt;1% through the z=1000–1100 knee and &lt;1.5% across the tested wider window.</td></tr>
+            <tr><td>carried He II</td><td>z=1900–8000</td><td>Saha at fully ionized epochs; HyRec-derived He I freeze-out below z≈4500, with the stated comparison gates in §05.</td></tr>
+            <tr><td><code>analytic_mixing!</code></td><td>recombination-era closure</td><td>Same reduced state plus host-calibrated f<sub>α</sub> and smoothing scale; f<sub>α</sub>=0 is the canonical local kernel.</td></tr>
+          </tbody></table><p><b>These are validation windows, not hard runtime guards.</b> Outside them, compare against <code>solve_chem!</code>. For collapse approaching three-body densities (n<sub>H</sub> ∼ 10⁸ cm⁻³), switch early with <code>solve_chem_hybrid_device_u16!</code> and validate the chosen <code>rho_switch</code> for the problem.</p></div>
         </div>
         <div className="mode-grid">
           <article><h3>Rate tables</h3><p>Optional monotonic log–log interpolation replaces ≈25 transcendental fits. It can cut rate-building cost 3–5× on GPU; direct fits remain the reference.</p><span>GPU hot path</span></article>
@@ -352,12 +392,12 @@ export default function Home() {
         </div>
         <div className="plot-card">
           <div className="plot-title"><div><span>LIVE FORMULA ATLAS</span><h3>{dataset.title}</h3></div><small>{dataset.series.length} channels · {dataset.x.length} samples</small></div>
-          <ScienceChart data={dataset} />
+          <ScienceChart key={dataset.id} data={dataset} />
           {dataset.note && <p className="plot-note">Method note — {dataset.note}</p>}
         </div>
         <div className="atlas-notes">
           <div><b>Reference path</b><span>Analytic fits are evaluated directly and remain the parity anchor.</span></div>
-          <div><b>Plot convention</b><span>Positive values on logarithmic y axes; zeros are omitted.</span></div>
+          <div><b>Plot convention</b><span>Positive values on logarithmic y axes; zeros are omitted and rate panels are visually floored at 10⁻³⁰.</span></div>
           <div><b>Regeneration</b><span>The checked-in dataset is rebuilt from the package, keeping documentation tied to code.</span></div>
         </div>
       </section>
@@ -424,8 +464,30 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="section integration-section" id="integration">
+        <div className="section-label">08 · C &amp; Fortran host codes</div>
+        <div className="split-heading"><h2>One small C ABI.<br />Every host language.</h2><p>C, C++, and Fortran production codes should not embed Julia objects in their mesh state. Compile a thin <code>Base.@ccallable</code> wrapper into <code>libchemistrykernels</code>, expose flat pointer-and-length functions, and keep the package’s two-field memory advantage all the way to the hydro boundary.</p></div>
+        <div className="host-principles">
+          <article><span>01 · C / C++</span><h3>Direct, zero-copy arrays</h3><p>Pass contiguous <code>rho</code>, <code>e</code>, <code>HII</code>, and <code>H2I</code> buffers. The wrapper uses <code>unsafe_wrap</code> for the duration of the call and never retains host pointers.</p></article>
+          <article><span>02 · Modern Fortran</span><h3><code>ISO_C_BINDING</code></h3><p>Bind to the same C symbols with exact-width kinds. A flattened multidimensional field is valid in native Fortran order because every chemistry cell is independent.</p></article>
+          <article><span>03 · Legacy Fortran</span><h3>A tiny compiler shim</h3><p>Keep the scientific ABI in C, then provide a compiler-specific underscore/by-reference wrapper or one modern <code>bind(C)</code> bridge module. Hide symbol mangling in that single file.</p></article>
+          <article><span>04 · Existing grackle call sites</span><h3>Source-compatible shim</h3><p>Mirror the grackle API and structs, relink the host, and reconstruct equilibrium-only legacy fields on return. Do not spoof grackle’s binary ABI or SONAME.</p></article>
+        </div>
+        <div className="integration-code">
+          <article><div className="code-heading"><span>C ABI</span><h3>A narrow production boundary</h3></div><CodeBlock>{cAbiStart}</CodeBlock></article>
+          <article><div className="code-heading"><span>FORTRAN 2003+</span><h3>The same symbol through <code>bind(C)</code></h3></div><CodeBlock>{fortranStart}</CodeBlock></article>
+        </div>
+        <div className="integration-checklist">
+          <div><b>Build and initialization</b><p>Use <code>PackageCompiler.create_library</code> today; initialize the bundled Julia runtime once per MPI rank, warm the selected solver once, and finalize only at process shutdown.</p></div>
+          <div><b>Ownership and threading</b><p>The host owns every array. Do not retain pointers after return. Serialize entry while bringing up the wrapper, then validate the intended Julia-thread/MPI policy under the real host scheduler.</p></div>
+          <div><b>Units and layout</b><p>Pass the four unit scalars explicitly. Keep <code>e</code> as specific energy and H₂ as <code>2 n(H₂)mH</code>; expose separate Float32/Float64 symbols instead of a runtime type flag.</p></div>
+          <div><b>Compatibility proof</b><p>Run a conformance grid over T, ρ, z, abundances, and timestep against the native Julia entry point and, during migration, the prior chemistry library.</p></div>
+        </div>
+        <p className="integration-note"><b>Status:</b> the repository documents the recommended wrapper contract; it does not yet ship a universal binary shim because grackle structure layouts and species-mapping policy vary by host. Start with the <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/docs/integration.md">host integration guide ↗</a> and the <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/docs/grackle_interface.md">C/Fortran shim recipe ↗</a>.</p>
+      </section>
+
       <section className="section refs-section" id="references">
-        <div className="section-label">08 · Provenance</div>
+        <div className="section-label">09 · Provenance &amp; source map</div>
         <div className="split-heading"><h2>Primary literature is part of the interface.</h2><p>Rates are not anonymous constants. The package comments identify the paper behind each fit; this overview keeps the core method and validation lineage one click away.</p></div>
         <div className="refs-grid">
           <a href="https://doi.org/10.1016/S1384-1076(97)00010-9"><span>1997 · New Astronomy 2, 181</span><h3>Modeling primordial gas in numerical cosmology</h3><p>Abel, Anninos, Zhang & Norman · reaction network and rate fits</p></a>
@@ -440,6 +502,20 @@ export default function Home() {
           <a href="https://arxiv.org/abs/1903.08657"><span>2020 · MNRAS 493, 1614</span><h3>A cosmic UV/X-ray background model update</h3><p>Faucher-Giguère · FG20 photoionization and photoheating tables</p></a>
           <a href="https://doi.org/10.1086/519445"><span>2007 · ApJ 666, 1</span><h3>Star formation at very low metallicity</h3><p>Glover & Jappsen · C/O/Si fine-structure cooling lineage</p></a>
         </div>
+        <div className="source-map"><div><span className="overline">READ THE IMPLEMENTATION</span><h3>The equations and their tests are one click away.</h3><p>Links point to <code>main</code>, so the site stays useful as the implementation evolves. For reproducible citation, replace <code>main</code> with the release tag or commit used by the simulation.</p></div><nav aria-label="Source code map">
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/solve.jl"><b>Public drivers</b><span>src/solve.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/subcycle.jl"><b>Full ODE subcycling</b><span>src/subcycle.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/network_step.jl"><b>Backward-Euler sweep</b><span>src/network_step.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl"><b>Analytic &amp; hybrid paths</b><span>src/fast.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/recombination_clumping.jl"><b>RECFAST &amp; Lyα mixing</b><span>src/recombination_clumping.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/log2_species.jl"><b>UInt16 codec</b><span>src/log2_species.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_atomic.jl"><b>Atomic rates</b><span>src/rates_atomic.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_h2.jl"><b>Molecular rates</b><span>src/rates_h2.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rate_tables.jl"><b>GPU rate tables</b><span>src/rate_tables.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/test/test_fast.jl"><b>Analytic validation</b><span>test/test_fast.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/test/test_recombination_mixing.jl"><b>HyRec / RECFAST gates</b><span>test/test_recombination_mixing.jl ↗</span></a>
+          <a href="https://github.com/yipihey/EmissionKernels.jl"><b>Cooling implementation</b><span>EmissionKernels.jl ↗</span></a>
+        </nav></div>
         <div className="citation-note"><b>Scientific transparency</b><p>Plot data in this site are generated from the checked-out package. Reported performance numbers are repository benchmarks, not cross-platform guarantees. Reported accuracy is stated with its tested redshift window and comparison target.</p></div>
       </section>
 

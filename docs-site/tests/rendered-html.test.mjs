@@ -24,8 +24,16 @@ test("renders the complete ChemistryKernels methods overview", async () => {
   assert.match(html, /O’Leary/);
   assert.match(html, /Abel, Bryan &amp; Norman/);
   assert.match(html, /FAST ANALYTIC PATH/);
+  assert.match(html, /What “analytic” does—and does not—mean/);
+  assert.match(html, /z=25 collapse/);
   assert.match(html, /Rate &amp; cooling atlas/);
+  assert.match(html, /visually floored at 10⁻³⁰/);
   assert.match(html, /Lyα streaming approximation/);
+  assert.match(html, /C &amp; Fortran host codes/);
+  assert.match(html, /ISO_C_BINDING/);
+  assert.match(html, /Legacy Fortran/);
+  assert.match(html, /src\/fast\.jl/);
+  assert.match(html, /test\/test_recombination_mixing\.jl/);
   assert.match(html, /Primary literature/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });

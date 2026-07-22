@@ -17,11 +17,13 @@ function series(name, values; note="")
            (isempty(note) ? "" : ",note:" * js_string(note)) * "}"
 end
 
-function dataset(id, title, x_label, y_label, x, curves; x_scale="log", y_scale="log", note="")
+function dataset(id, title, x_label, y_label, x, curves;
+                 x_scale="log", y_scale="log", y_floor=nothing, note="")
     body = "{id:" * js_string(id) * ",title:" * js_string(title) *
            ",xLabel:" * js_string(x_label) * ",yLabel:" * js_string(y_label) *
            ",xScale:" * js_string(x_scale) * ",yScale:" * js_string(y_scale) *
            ",x:" * arr(x) * ",series:[" * join(curves, ",") * "]"
+    y_floor !== nothing && (body *= ",yFloor:" * num(y_floor))
     !isempty(note) && (body *= ",note:" * js_string(note))
     return body * "}"
 end
@@ -166,15 +168,20 @@ highz_curves = [
 ]
 
 datasets = [
-    dataset("atomic-rates", "Atomic reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, atomic_rates),
+    dataset("atomic-rates", "Atomic reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, atomic_rates,
+            y_floor=1.0e-30),
     dataset("molecular-rates", "H₂ / H⁻ reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, molecular_rates,
+            y_floor=1.0e-30,
             note="k22 is a three-body coefficient (cm⁶ s⁻¹); it is included here for completeness."),
-    dataset("deuterium-rates", "Deuterium reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, deuterium_rates),
+    dataset("deuterium-rates", "Deuterium reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, deuterium_rates,
+            y_floor=1.0e-30),
     dataset("atomic-cooling", "Atomic cooling coefficients", "gas temperature · K", "cooling coefficient · erg cm³ s⁻¹", T, atomic_cooling),
     dataset("molecular-cooling", "H₂ and HD cooling functions", "gas temperature · K", "coefficient / LTE rate", Tm, molecular_cooling,
             note="Low-density coefficients and per-molecule LTE rates share the panel; use the assembler for density-weighted cooling."),
-    dataset("cmb-rates", "CMB photoprocesses", "redshift z", "rate · s⁻¹", z_cmb, cmb_rates, x_scale="linear"),
-    dataset("uvb-ion", "FG20 photoionisation", "redshift z", "rate · s⁻¹", z_uvb, uvb_ion, x_scale="linear"),
+    dataset("cmb-rates", "CMB photoprocesses", "redshift z", "rate · s⁻¹", z_cmb, cmb_rates,
+            x_scale="linear", y_floor=1.0e-30),
+    dataset("uvb-ion", "FG20 photoionisation", "redshift z", "rate · s⁻¹", z_uvb, uvb_ion,
+            x_scale="linear", y_floor=1.0e-30),
     dataset("uvb-heat", "FG20 photoheating", "redshift z", "heating / absorber · erg s⁻¹", z_uvb, uvb_heat, x_scale="linear"),
     dataset("dust-temp", "Dust microphysics · fiducial field", "gas temperature · K", "rate / heating coefficient", Tm, dust_temp,
             note="G₀=1, Z=Z⊙, Aᵥ=0, nₑ=1 cm⁻³; Tdust is solved locally including the z=0 CMB floor."),
@@ -189,7 +196,7 @@ out = joinpath(@__DIR__, "..", "app", "science-data.ts")
 open(out, "w") do io
     println(io, "// Generated from the package's Julia formulas by scripts/generate_science_data.jl")
     println(io, "export type ScienceSeries = { name: string; values: (number | null)[]; note?: string };")
-    println(io, "export type ScienceDataset = { id: string; title: string; xLabel: string; yLabel: string; xScale: string; yScale: string; x: number[]; series: ScienceSeries[]; note?: string };")
+    println(io, "export type ScienceDataset = { id: string; title: string; xLabel: string; yLabel: string; xScale: string; yScale: string; x: number[]; series: ScienceSeries[]; yFloor?: number; note?: string };")
     println(io, "export const scienceDatasets: ScienceDataset[] = [")
     println(io, join(datasets, ",\n"))
     println(io, "];")

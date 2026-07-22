@@ -52,12 +52,42 @@ Base.@ccallable calculate_cooling_time(...)::Cint  # → e / cooling_edot
 Ship per-platform artifacts (linux-x86_64, linux-aarch64, macos-arm64) via GitHub Releases
 (and optionally a JLL).
 
-## 4. Fortran hosts (RAMSES)
+## 4. C/C++ and Fortran call patterns
 
-Provide an `ISO_C_BINDING` module mirroring grackle's `grackle_fortran_interface`, wrapping
-the C entry points above so `cooling_module`'s grackle calls map across unchanged.
+Keep one scientific ABI: a small C header with separate Float32/Float64 entry points,
+fixed-width integers, a pointer plus element count for every field, and a plain
+`ck_units` struct. The wrapper must not retain a host pointer after returning. Initialize
+the bundled Julia runtime once per process (normally once per MPI rank), warm the selected
+solver, and finalize only at shutdown.
 
-## 5. Species mapping — the one project decision
+For modern Fortran (2003+), provide an `ISO_C_BINDING` module with `bind(C)` interfaces to
+those exact symbols. Use `integer(c_size_t), value` for lengths, `real(c_float)` or
+`real(c_double)` for arrays, and `real(c_double), value` for the timestep. A contiguous
+multidimensional Fortran field can be passed as a flat native-order array: cells are
+independent, so C versus Fortran indexing order does not change the chemistry.
+
+For a legacy Fortran 77/90 host, keep compiler spelling and by-reference conventions out
+of the scientific library. Add either (a) one small C shim exporting the required trailing-
+underscore symbols and dereferencing scalar arguments or, preferably, (b) one modern
+Fortran `bind(C)` bridge module called from the legacy routines. Test this bridge with the
+same compiler flags and integer-width options as the production executable.
+
+For an existing RAMSES/grackle integration, the Fortran module can mirror
+`grackle_fortran_interface` so `cooling_module` call sites remain stable while the C shim
+performs the reduced-species mapping.
+
+## 5. Runtime and threading contract
+
+- The host owns all arrays; `unsafe_wrap(...; own=false)` borrows them only for the call.
+- Do not call Julia finalization between timesteps. Cache rate/cooling tables and compiled
+  method state for the life of the process.
+- Start with serialized entry into the library. Enable concurrent host calls only after
+  testing the exact Julia-thread, OpenMP, and MPI configuration used in production.
+- Return a stable integer error code across the ABI. Catch Julia exceptions at the wrapper
+  boundary and copy a diagnostic into a caller-provided buffer or a thread-local query.
+- Expose units and species conventions in the C header; never infer them from a host name.
+
+## 6. Species mapping — the one project decision
 
 grackle's `primordial_chemistry` modes advect more species (full He stages, H⁻, H₂⁺) than
 this reduced network does. Two options for the shim:
@@ -68,7 +98,7 @@ this reduced network does. Two options for the shim:
 - **Full parity:** extend the network to advect the full set (only if a target code needs
   non-equilibrium He/H⁻).
 
-## 6. Trust anchor
+## 7. Trust anchor
 
 Ship a **conformance suite** that runs a grid of (T, ρ, z, species, metallicity) states
 through both real `libgrackle` and the shim and asserts agreement to a documented

@@ -46,6 +46,35 @@ It sub-cycles each cell internally (10%-change limiter, stiff CMB-Compton split)
 `e`, `HII`, `H2I` (and `HDI`) back in place. It is **per-cell independent** — trivially
 parallel; the kernel runs the whole array on the chosen backend.
 
+## Analytic and hybrid paths
+
+`solve_chem_analytic!` is a reduced primordial H + H₂ solver. It reconstructs H I and
+electrons by conservation, closes H⁻ and H₂⁺ in quasi-steady state, integrates H II with a
+linear-source Riccati solution, and integrates CMB-Compton exchange exponentially.
+Non-Compton cooling and the temperature-dependent rate coefficients are frozen within each
+substep; `dtfrac` controls their re-evaluation. This path deliberately excludes HD, dust,
+metals, and the general UV background.
+
+The current regression envelope is:
+
+| problem | tested range | comparison gate |
+|---|---|---|
+| mean primordial IGM | z=1200→20 | H II and energy within 5% of `solve_chem!` at z=20; H₂ within ×3 |
+| minihalo collapse | z=25, nH through 10⁴ cm⁻³ | H II within 5%, H₂ within 25%, terminal T=60–200 K |
+| H recombination | z=900–1300 | <1% at z=1000–1100; <1.5% over the tested wider window |
+| helium-aware recombination | z=1900–8000 | Saha at fully ionized epochs plus carried He II through HyRec-derived He I freeze-out |
+
+These are validation windows, not runtime cutoffs. Compare with `solve_chem!` when applying
+the analytic closure elsewhere. For collapse approaching three-body densities
+(nH≈10⁸ cm⁻³), `solve_chem_hybrid_device_u16!` can switch dense cells to the full network;
+validate `rho_switch` for the target problem. `solve_chem_analytic_mixing!` adds the
+host-calibrated Lyα escape-density closure; with `f_alpha=0` it reduces to the local
+analytic kernel.
+
+Implementation and validation: [`src/fast.jl`](../src/fast.jl),
+[`src/recombination_clumping.jl`](../src/recombination_clumping.jl), and
+[`test/test_fast.jl`](../test/test_fast.jl).
+
 ### Metals (independent [α/Fe])
 
 Pass per-cell number abundances `n(X)/n_H` as a NamedTuple of arrays:
@@ -84,5 +113,5 @@ T = temperature_from_reduced(rho, e, HII, H2I; fh=fh)
 Covered: H/He collisional excitation & ionization, recombination, bremsstrahlung, H₂
 (Galli-Palla), HD, CMB-Compton, metal fine-structure (C/O/Si/Fe) with live-nₑ ion balance,
 FG20 UVB photo-ionization/heating, HyRec-accurate recombination (+ optional Lyα mixing).
-**Not** (yet): dust, full tabulated metal cooling above 10⁴ K (the fine-structure channel
-tapers out there), radiative-transfer heating, non-equilibrium He/H⁻ advection.
+**Not** (yet): full tabulated metal cooling above 10⁴ K (the fine-structure channel tapers
+out there), radiative-transfer heating, and general non-equilibrium He/H⁻ advection.
