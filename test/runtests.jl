@@ -36,6 +36,7 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_rates_cmb.jl")
     include("test_equilibrium.jl")
     include("test_network_step.jl")
+    include("test_dense_threebody.jl")
     include("test_driver.jl")
     include("test_onezone.jl")
     include("test_recombination_mixing.jl")

@@ -54,7 +54,7 @@ const _RECFAST_V1_FUDGE = 1.14    # RECFAST v1 (flat fudge on α_B)
 const _RECFAST_V2_FUDGE = 1.125   # RECFAST v2 (fudge on α_B; Gaussian on K)
 
 """
-    recfast_gauss_factor(z) -> Float64
+    recfast_gauss_factor(z) -> floating-point type of `z`
 
 RECFAST v2 multiplicative correction to the Lyα escape factor K (CAMB
 `Hswitch=True`; recfast.f90 line `K = CK/Hz*(1 + AGauss1·… + AGauss2·…)`):
@@ -67,10 +67,14 @@ This scales K — and therefore BOTH KL and KB in the Peebles C-factor — bring
 x_e(z) within ~0.1-0.3% of HyRec. Returns 1.0 for RECFAST v1 (no Hswitch).
 """
 @inline function recfast_gauss_factor(z::Real)
-    lnzp1 = log(1.0 + Float64(z))
-    g1 = -0.14  * exp(-((lnzp1 - 7.28) / 0.18)^2)
-    g2 =  0.079 * exp(-((lnzp1 - 6.73) / 0.33)^2)
-    return 1.0 + g1 + g2
+    zr = float(z)
+    R = typeof(zr)
+    lnzp1 = log(one(R) + zr)
+    d1 = (lnzp1 - R(7.28)) / R(0.18)
+    d2 = (lnzp1 - R(6.73)) / R(0.33)
+    g1 = -R(0.14) * exp(-(d1*d1))
+    g2 =  R(0.079) * exp(-(d2*d2))
+    return one(R) + g1 + g2
 end
 
 # Backward-compatible alias (deprecated): the old name implied the correction

@@ -42,12 +42,7 @@ end
 # where n_HI≈C).  Reduces to `_riccati(scH=q)` when p→0 (the cold collapse regime).
 @inline function _riccati2(y0::R, k2::R, p::R, q::R, C::R, dt::R) where {R}
     d = q + p*C                                            # dy/dt = d − p·y − k2·y²
-    (p <= zero(R) && q <= zero(R)) && return y0 / (one(R) + k2*y0*dt)   # pure recomb
-    Δ   = sqrt(p*p + R(4)*k2*d)
-    yeq = (Δ - p) / (R(2)*k2)                              # positive equilibrium root
-    ym  = -(Δ + p) / (R(2)*k2)                             # negative root (< 0)
-    E   = exp(-min(Δ*dt, R(60)))                           # e^{−Δ·dt}, Δ = k2·(yeq−ym)
-    return (yeq*(y0 - ym) - ym*(y0 - yeq)*E) / ((y0 - ym) - (y0 - yeq)*E)
+    return _riccati_linear(y0, k2, p, d, dt)
 end
 
 # Exact solution of dy/dt = source - loss*y - k2*y^2, written to remain
@@ -67,7 +62,13 @@ end
     end
     b = max(loss, zero(R))
     c = max(source, zero(R))
-    disc = sqrt(max(b*b + R(4)*k2*c, zero(R)))
+    # Scaled hypot(b, 2sqrt(k2*c)). Forming b² or k2*c directly can underflow
+    # on Float32 Metal (which flushes subnormals), even when the discriminant
+    # itself is representable. The scaled norm also avoids overflow.
+    s = R(2) * sqrt(max(k2, zero(R))) * sqrt(c)
+    scale = max(b, s)
+    disc = scale > zero(R) ?
+           scale * sqrt((b/scale)^2 + (s/scale)^2) : zero(R)
     disc <= zero(R) && return y0
     yp = c > zero(R) ? (R(2)*c) / (b + disc) : zero(R)
     ym = (-b - disc) / (R(2)*k2)
@@ -230,17 +231,20 @@ He I rate (`helium_HeI_rate_AB`, semi-forbidden 2³P + 2¹P-escape) for the slow
 z≈2000-2500 freeze-out — and returned as the 5th value.  Default `NaN` ⇒ He neutral
 (collapse) or, for hot/shock gas (Tc>5000K), the stateless Saha QSSA.
 
-Fully closed-form variant of [`evolve_cell_fast`](@ref) — **no stiff/BDF sub-cycling
-of the chemistry**.  Each step advances x_HII by the exact Riccati solution
-(recombination vs the k57/k58 ionization floor), x_H2 by the exact backward-Euler
-balance of formation (H⁻ + H₂⁺ + 3-body) against collisional dissociation
-(k13·n_HI + k11·n_HII + k12·n_e — linear in n_H2, so still one closed-form division),
-and the energy by the analytic Compton exponential + explicit non-Compton cooling.
-The step is limited ONLY by the non-Compton cooling time (the Compton stiffness is
-handled analytically), so Compton-locked gas takes a single step.  Same accuracy as
-`evolve_cell_fast` at a fraction of the substeps; **this is the default fast path**
-(`evolve_cell_fast` is the accurate subcycled fallback).  On an RTX A6000 (128³, f32)
-it runs at ~4 Gcell/s — ~4× the full `evolve_cell` network.
+Reduced closed-form variant of [`evolve_cell_fast`](@ref) — **no BDF chemistry
+solve**. Each substep advances x_HII by the exact Riccati solution
+(recombination versus ionization), x_H2 by the same coupled backward-Euler
+formation/destruction balance as the full network, and the energy by an
+analytic Compton exponential plus explicit non-Compton cooling. The
+temperature-dependent coefficients are refreshed on cooling, Compton-transition,
+and H₂ pair-relaxation timescales. The last guard is required when three-body
+formation and collisional dissociation are both fast: stability alone is not
+enough when frozen coefficients nearly cancel.
+
+This path is validated against `evolve_cell` for the primordial IGM, minihalo
+collapse, cosmological H/He recombination, and selected dense H₂ states through
+`nH=10^16 cm^-3`. It remains a reduced model: use the full network when HD,
+dust, metals, a general UV background, or unvalidated thermochemistry matters.
 
 `rate_tables` (an optional `RateTables` from `build_rate_tables`) swaps the per-iteration
 analytic rate fits for a log–log table lookup; it helps the full network but is a wash-to-
@@ -314,7 +318,7 @@ iteration count, not the rate fits), so the fits remain the default.
             # cleanly cancelling, so leave it off.  Un-fudged in the collapse (dense gas).
             k2   = (evolve_z && zt < R(1600)) ?
                    peebles_k2_mixing(T, yHI, yHI, Hz; fudge = R(1.125),
-                                     gauss = R(recfast_gauss_factor(zt))) :
+                                     gauss = recfast_gauss_factor(zt)) :
                    peebles_k2(T, yHI, Hz)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k15v=k15(T)
@@ -383,7 +387,14 @@ iteration count, not the rate fits), so the fits remain the default.
         dT     = abs(Tc - T)
         exmax  = dT > tiny ? f*T/dT : one(R)
         dtc_c  = (exmax < one(R) && Kc > tiny) ? -log(one(R) - exmax)/Kc : typemax(R)
-        dtc = min(_step_f(e, de_rest, f), dtc_c, rem)
+        # The combined H₂ update is stable for arbitrarily large steps, but its
+        # coefficients freeze nHI and T. Resolve the pair relaxation when
+        # three-body formation or collisional dissociation is faster than the
+        # thermal limiter; 0.2 keeps the dense fixed-point trajectory within
+        # about one percent of the full network without burdening cold/IGM gas.
+        h2_frequency = R(2)*k22v*yHI^2 + k13v*yHI + k11v*yHII + k12v*yde
+        dtc_h2 = R(0.2) / max(h2_frequency, tiny)
+        dtc = min(_step_f(e, de_rest, f), dtc_c, dtc_h2, rem)
 
         # ── energy: analytic Compton relaxation + explicit non-Compton cooling over dtc ──
         ex  = -expm1(-Kc*dtc)                       # 1 − e^{−Kc·dtc}  (stable)
@@ -397,57 +408,24 @@ iteration count, not the rate fits), so the fits remain the default.
         #    k1·n_e); this removes the frozen-source overshoot that made x_HII oscillate
         #    step-to-step at z≳1600 (H Saha-pinned).  The genuinely-nonlinear collisional
         #    floor k57·n_HI² + k58·n_HI·n_HeI stays frozen in q.  C = n_HI + n_HII. ──
+        yHII_rate = yHII
+        yde_rate = yde
         pion = kb1s + k1v*yde
         qion = k57v*yHI*yHI + k58v*yHI*yHeI/R(4)
         yHII = _riccati2(yHII, k2, pion, qion, yHI + yHII, dtc)
-        yde  = yHII        # ADVANCE n_e = n_HII from the Riccati BEFORE forming H₂:
-                           # H⁻/H₂ formation ∝ n_e, so using the recombined end-of-step
-                           # electron density (not the stale start value) removes the
-                           # coarse-Δt H₂ over-formation at essentially zero cost.
-        # ── x_H2: formation (H⁻ + H₂⁺ closed-form channels + 3-body) vs collisional
-        #    dissociation, backward-Euler — unconditionally stable, still fully closed-form
-        #    (one division, NO subcycle).  acH2 = k13·n_HI + k11·n_HII + k12·n_e : the
-        #    destruction the old pure-formation quadrature FROZE; it matters once the
-        #    compressing core warms toward ~few×10³ K (H₂ + H → 3H), pulling f_H2 back
-        #    toward its formation/dissociation balance instead of accumulating unbounded.
-        # Advance the H₂-formation rates to the POST-cooling temperature.  Rates are
-        # evaluated at the start-of-substep T, but the gas COOLED over the substep and
-        # spends its time at the lower T; k7 (H+e→H⁻) ∝ T^0.95 and k8 (H⁻+H→H₂) both
-        # drop with T, so the start-T value over-forms H₂.  Refresh T from the updated
-        # energy and re-evaluate ONLY k7,k8 (the H⁻ channel = 99.9% of formation) — this
-        # is enough to make the reduced solver's CONVERGED H₂ match the full network's
-        # bit-for-bit, at 2 rate re-evals (not the full ~13).  (Table path keeps start-T.)
-        if rate_tables === nothing
-            Ta = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde, tiny, yH2I/R(2), tiny; gamma = GAMMA_DEFAULT)
-            k7v = k7(Ta); k8v = k8(Ta)
-        end
-        # H⁻ / H₂⁺ quasi-steady-state.  The H⁻ denominator now carries the FULL
-        # destruction set (matching the network's equilibrium_HM): associative
-        # detachment (k8+k15)·n_HI + mutual neutralization by the ionized species
-        # (k16+k17)·n_HII + k14·n_e + k19·n_H2II + CMB photodetachment k27.  These
-        # ionized-species sinks are ~0.1% of k8·n_HI at collapse ionization (x_e≪1)
-        # so they don't shift the cold-collapse H₂, but they make the H⁻ equilibrium
-        # exact in the recombination era (x_e→1) too.  n_H2II first for the k19 term.
-        nH2II = k9v*yHI*yHII / (k10v*yHI + k28v + tiny)
-        nHM   = k7v*yHI*yde  / ((k8v + k15v)*yHI + (k16v + k17v)*yHII +
-                                 k14v*yde + k19v*nH2II + k27v + tiny)
-        # H₂ formation with EXACT n_HI depletion (Bernoulli), then dissociation as an
-        # operator-split linear sink.  Formation is nonlinear in n_HI: linear (H⁻ via
-        # k8·n_HM, H₂⁺ via k10·n_H2II) with coeff `af` + 3-body ∝ n_HI³ (k22).  With
-        # H-nuclei conservation n_HI + yH2I = C, dn_HI/dt = −2(af·n_HI + k22·n_HI³) is
-        # a Bernoulli eq; w = n_HI⁻² linearises it (w′ = 4·af·w + 4·k22), integrated
-        # EXACTLY over the substep → the fully-molecular transition (n_HI→0) is captured
-        # instead of the frozen-n_HI over-formation.  Reduces to the old formation
-        # backward-Euler at low density (af·dt≪1, k22→0).
-        af    = k8v*nHM + k10v*nH2II                     # linear formation coeff (rate = af·n_HI)
-        CH    = yHI + yH2I                               # conserved H nuclei (not in H⁺), y-conv
-        w0    = one(R) / (yHI*yHI)
-        e4a   = exp(min(R(4)*af*dtc, R(60)))             # cap → fully molecular (no overflow)
-        gfac  = af > tiny ? (e4a - one(R))/af : R(4)*dtc  # (e^{4af·dt}−1)/af  → 4·dt as af→0 (no blow-up)
-        wN    = w0*e4a + k22v*gfac                       # w(dt) = n_HI(dt)⁻²  (exact Bernoulli)
-        yH2I  = CH - one(R)/sqrt(wN)                     # H₂ formed = n_HI consumed
-        acH2  = k13v*yHI + k11v*yHII + k12v*yde          # dissociation (≈0 below ~8000 K)
-        yH2I  = yH2I / (one(R) + acH2*dtc)               # operator-split backward-Euler sink
+        yde  = yHII        # advance charge state; H₂ below deliberately uses the
+                           # saved start-of-substep state to match network_step ordering
+        # ── x_H2: same combined creation/destruction backward-Euler update as
+        # the full network. The former "exact formation, then implicit
+        # dissociation" split did not preserve a formation/dissociation fixed
+        # point over a large step. Keeping both terms in one rational update is
+        # positivity-preserving, costs one division, and matches network_step.
+        # nHMh/nH2IIh and the ion/electron state deliberately come from the
+        # start of the substep, following the full ordered sweep.
+        scH2 = R(2) * (k8v*nHMh*yHI + k10v*nH2IIh*yHI +
+                        k19v*nH2IIh*nHMh + k22v*yHI*yHI^2)
+        acH2 = k13v*yHI + k11v*yHII_rate + k12v*yde_rate
+        yH2I = (yH2I + scH2*dtc) / (one(R) + acH2*dtc)
 
         yH2I = yH2I < tiny ? tiny : (yH2I > fhd ? fhd : yH2I)
         yHII = yHII < tiny ? tiny : (yHII > fhd - yH2I ? fhd - yH2I : yHII)
@@ -528,6 +506,8 @@ function solve_chem_analytic!(rho::AbstractVector, e_int::AbstractVector,
     @assert length(e_int) == n && length(HII) == n && length(H2I) == n
     P  = precision
     be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables =
+        _resolve_tables(backend, P, rate_tables, cool_tables)
     du = P(density_units); vu2 = P((length_units/time_units)^2); tu = P(time_units)
     z  = P(1.0/a_value - 1.0)
     d_rho = to_device(be, collect(rho),   P); d_e   = to_device(be, collect(e_int), P)
@@ -557,6 +537,8 @@ function solve_chem_analytic_device!(rho, e_int, HII, H2I;
                                      workgroup_size::Int = 0, backend::Symbol = :cuda,
                                      precision::Type = Float32)
     n  = length(rho); P = precision; be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables =
+        _resolve_tables(backend, P, rate_tables, cool_tables)
     du = P(density_units); vu2 = P((length_units/time_units)^2); tu = P(time_units)
     z  = P(1.0/a_value - 1.0)
     k! = workgroup_size > 0 ? _evolve_analytic_k!(be, workgroup_size) : _evolve_analytic_k!(be)
@@ -619,6 +601,8 @@ function solve_chem_analytic_u16!(rho::AbstractVector, e_int::AbstractVector,
     @assert length(e_int) == n && length(HII_u16) == n && length(H2I_u16) == n
     P  = precision
     be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables =
+        _resolve_tables(backend, P, rate_tables, cool_tables)
     du = P(density_units); vu2 = P((length_units/time_units)^2); tu = P(time_units)
     z  = P(1.0/a_value - 1.0)
     d_rho = to_device(be, collect(rho),   P); d_e = to_device(be, collect(e_int), P)
@@ -648,6 +632,8 @@ function solve_chem_analytic_device_u16!(rho, e_int, HII_u16, H2I_u16;
                                          workgroup_size::Int = 0, backend::Symbol = :cuda,
                                          precision::Type = Float32)
     n  = length(rho); P = precision; be = ChemistryKernels.backend(backend)
+    rate_tables, cool_tables =
+        _resolve_tables(backend, P, rate_tables, cool_tables)
     du = P(density_units); vu2 = P((length_units/time_units)^2); tu = P(time_units)
     z  = P(1.0/a_value - 1.0)
     k! = workgroup_size > 0 ? _evolve_analytic_k_u16!(be, workgroup_size) : _evolve_analytic_k_u16!(be)
@@ -659,15 +645,13 @@ end
 export solve_chem_analytic_device_u16!
 
 # ── hybrid analytic ⇄ full-network per-cell dispatch ─────────────────────────
-# The analytic path (evolve_cell_analytic) is a reduced primordial H+H₂ network:
-# fast, great for IC generation, but MISSING 3-body H₂ formation and collisional
-# H₂ dissociation — the physics that governs the dense (n ≳ 1e8 cm⁻³) collapsing
-# core.  This kernel switches to the FULL network (evolve_cell) per cell where the
-# physical density r exceeds `rho_switch` (CGS g/cm³), keeping the cheap analytic
-# path everywhere else.  Same 2-species (HII, H2I) u16 contract as the analytic
-# path — the full network reconstructs the intermediates (HM, H2II, He, e)
-# internally.  Warp divergence is minimal in a collapse (density is spatially
-# coherent → warps are all-dense or all-analytic).
+# The analytic path (evolve_cell_analytic) is a reduced primordial H+H₂ network.
+# It now shares the full network's coupled H₂ backward-Euler update and resolves
+# the dense formation/dissociation relaxation time. This compatibility kernel
+# still permits a per-cell switch to the FULL network (evolve_cell) at a chosen
+# physical density `rho_switch` (CGS g/cm³), but density alone is no longer a
+# reason to use it. New integrations should prefer the full network throughout;
+# both branches retain the same 2-species (HII, H2I) u16 storage contract.
 @kernel function _evolve_hybrid_k_u16!(e, HII_u16, H2I_u16, @Const(rho), du, vu2, tu, dt, z,
                                        hubble, Om, OL, fh, hexp, aoa, rtab, ctab, dtfrac, itcap,
                                        rho_switch)
@@ -702,9 +686,10 @@ end
     solve_chem_hybrid_device_u16!(rho, e_int, HII_u16, H2I_u16; rho_switch, …)
 
 Per-cell dispatch between the analytic reduced network and the full `evolve_cell`
-network: cells with physical density `> rho_switch` (CGS g/cm³) run the FULL
-network (3-body H₂ formation + collisional dissociation — the dense-core physics
-the analytic path omits), all others run the cheap analytic path.  Same device
+network: cells with physical density `> rho_switch` (CGS g/cm³) run the full
+network and all others run the analytic path. Both paths include three-body H₂
+formation and collisional dissociation; the distinction is the reduced versus
+general thermochemical model, not a hard density-validity boundary. Same device
 buffers and 2-species (HII, H2I) u16 contract as
 [`solve_chem_analytic_device_u16!`](@ref).  `rho_switch → 0` ⇒ full network
 everywhere; `rho_switch → ∞` ⇒ pure analytic (identical to the analytic solver).

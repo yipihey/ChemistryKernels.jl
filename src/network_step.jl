@@ -37,8 +37,52 @@ export network_step
 end
 
 """
+    _threebody_h2_equilibrium(hydrogen_budget, k22, k13)
+
+H₂ nuclei abundance at equilibrium between three-body formation
+`3H → H₂ + H` and H-impact dissociation `H₂ + H → 3H`.  Both the input and
+return value use the network convention in which `yH2I = 2n(H₂)`.
+"""
+@inline function _threebody_h2_equilibrium(hydrogen_budget, k22, k13)
+    R = typeof(hydrogen_budget)
+    z = zero(R)
+    C = max(hydrogen_budget, z)
+    k22 <= z && return z
+    k13 <= z && return C
+
+    # At equilibrium 2k22*nHI^3 = k13*nHI*yH2 and nHI+yH2=C.  This form of
+    # the positive quadratic root avoids subtractive cancellation when the
+    # equilibrium molecular fraction is small.
+    nHI = R(2)*C / (one(R) + sqrt(one(R) + R(8)*k22*C/k13))
+    return clamp(C - nHI, z, C)
+end
+
+@inline function _use_threebody_h2_equilibrium(yHI, yH2I, k22, k13,
+                                                h2_source, h2_loss, dt)
+    R = typeof(yHI)
+    z = zero(R)
+    pair_budget = max(yHI + yH2I, z)
+    H2I_eq = _threebody_h2_equilibrium(pair_budget, k22, k13)
+    HI_eq = pair_budget - H2I_eq
+    pair_source = R(2)*k22*yHI*yHI^2
+    pair_sink = k13*yHI*yH2I
+    pair_source_eq = R(2)*k22*HI_eq*HI_eq^2
+    pair_sink_eq = k13*HI_eq*H2I_eq
+    pair_activity = max(pair_source + pair_sink,
+                        pair_source_eq + pair_sink_eq)
+    other_activity = max(h2_source - pair_source, z) +
+                     max(h2_loss - k13*yHI, z)*yH2I
+    pair_frequency = max(R(2)*k22*yHI^2 + k13*yHI,
+                         R(2)*k22*HI_eq^2 + k13*HI_eq)
+    return pair_activity > z &&
+           other_activity <= R(0.01)*pair_activity &&
+           pair_frequency*dt >= R(10)
+end
+
+"""
     network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II, yDI, yDII, yHDI, K, dt;
-                 deuterium = false, dust_rates = nothing)
+                 deuterium = false, dust_rates = nothing,
+                 stiff_h2_pair = Val(false))
 
 One backward-Euler sweep. `d` = total density (same units as the species), `fh` =
 hydrogen mass fraction, `K` = NamedTuple of rate coefficients `k1..k58` plus the
@@ -49,13 +93,20 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
   - `k_h2d` [cm³/s] — H₂ formation on dust (Cazaux & Tielens 2004)
   - `k_grr` [cm³/s] — grain-assisted HII recombination (Weingartner & Draine 2001)
   - `k_lw`  [s⁻¹]  — effective LW H₂ photodissociation (Draine & Bertoldi 1996)
+
+With `stiff_h2_pair=Val(true)`, a substep that resolves many relaxation times
+and is dominated by three-body formation plus H-impact dissociation is placed
+directly on that pair's conservative equilibrium manifold.  Higher-level
+subcyclers enable this guard; the default remains the pinned literal one-sweep
+transcription for standalone callers.
 """
 @inline function network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
                               yDI, yDII, yHDI, K, dt; deuterium::Bool = false,
                               yHeII_in = nothing, yHeIII_in = nothing,
                               GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0,
                               dust_rates = nothing,
-                              intermediates_current::Val{IC} = Val(false)) where {IC}
+                              intermediates_current::Val{IC} = Val(false),
+                              stiff_h2_pair::Val{SP} = Val(false)) where {IC,SP}
     R    = typeof(yHI)
     z    = zero(R)
     two  = R(2); half = R(0.5); three = R(3); four = R(4)
@@ -157,6 +208,13 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
     ac_lw = dust_rates !== nothing ? dust_rates.k_lw : zero(R)
     ac = k13*yHI + k11*yHII + k12*yde + ac_lw
     H2Ip = (sc*dt + yH2I) / (one(R) + ac*dt)
+    if SP && _use_threebody_h2_equilibrium(yHI, yH2I, k22, k13, sc, ac, dt)
+        # A frozen-yHI backward-Euler sweep can overshoot the physical fixed
+        # point when the pair is extremely stiff, then become trapped at
+        # yHI=0 where H-impact dissociation also vanishes. In the asymptotic
+        # pair-dominated regime solve the conservative balance directly.
+        H2Ip = _threebody_h2_equilibrium(yHI + yH2I, k22, k13)
+    end
 
     # 8,9) store the consistent old-state equilibrium H₂⁺ (H⁻ already in HMp above)
     H2IIp = H2IIeq

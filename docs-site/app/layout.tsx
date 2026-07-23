@@ -9,16 +9,16 @@ export async function generateMetadata(): Promise<Metadata> {
   const base = new URL(`${proto}://${host}`);
   return {
     metadataBase: base,
-    title: "ChemistryKernels.jl — Primordial chemistry at accelerator scale",
-    description: "Methods, validation, rates, cooling functions, recombination physics, and usage for ChemistryKernels.jl.",
+    title: "ChemistryKernels.jl — Full primordial chemistry at accelerator scale",
+    description: "The fast, accurate full-network production path for primordial chemistry, with methods, validation, rates, cooling, recombination physics, and usage.",
     keywords: ["primordial chemistry", "astrophysics", "Julia", "GPU", "recombination", "HyRec", "RECFAST"],
     openGraph: {
       title: "ChemistryKernels.jl",
-      description: "From recombination to the first cooling halos — table-free chemistry on CPU and GPU.",
+      description: "The full primordial network from recombination to first-star collapse — fast, accurate chemistry on CPU and GPU.",
       type: "website",
       images: [{ url: new URL("/og.png", base).toString(), width: 1200, height: 630, alt: "ChemistryKernels.jl methods overview" }],
     },
-    twitter: { card: "summary_large_image", title: "ChemistryKernels.jl", description: "Primordial chemistry at accelerator scale.", images: [new URL("/og.png", base).toString()] },
+    twitter: { card: "summary_large_image", title: "ChemistryKernels.jl", description: "The full primordial chemistry network at accelerator scale.", images: [new URL("/og.png", base).toString()] },
   };
 }
 

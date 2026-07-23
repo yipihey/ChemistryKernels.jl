@@ -23,7 +23,10 @@ test("renders the complete ChemistryKernels methods overview", async () => {
   assert.match(html, /Tseliakhovich/);
   assert.match(html, /O’Leary/);
   assert.match(html, /Abel, Bryan &amp; Norman/);
-  assert.match(html, /FAST ANALYTIC PATH/);
+  assert.match(html, /ANALYTIC METHODS · REFERENCE ONLY/);
+  assert.match(html, /One production path/);
+  assert.match(html, /full network is[\s\S]*the fast path/i);
+  assert.match(html, /not recommended for production/);
   assert.match(html, /What “analytic” does—and does not—mean/);
   assert.match(html, /z=25 collapse/);
   assert.match(html, /Rate &amp; cooling atlas/);

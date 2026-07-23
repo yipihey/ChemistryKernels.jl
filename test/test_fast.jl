@@ -1,5 +1,6 @@
 # test_fast.jl — the reduced fast analytic H+H2 mode vs the full network.
-using ChemistryKernels, Test, Printf
+using ChemistryKernels, EmissionKernels, Test, Printf
+try; @eval using Metal; catch; end
 
 let CK = ChemistryKernels,
     MH=1.6726e-24, KB=1.380649e-16, FH=0.76, GAMMA=5/3,
@@ -228,6 +229,25 @@ let CK = ChemistryKernels,
         @test isapprox(hd[i], hf[i]; rtol=0.03)             # x_HII fraction within codec ULP
         @test isapprox(md[i], mf[i]; rtol=0.03)             # f_H2 fraction within codec ULP
         @test all(isfinite, hd) && all(isfinite, md)
+
+        # Metal uses persistent Float32 rate/cooling tables by default. Compare
+        # against the same tabulated path on CPU, not against different libm fits.
+        if CK.has_backend(:metal)
+            rt32 = CK.build_rate_tables(; backend=:cpu, precision=Float32)
+            ct32 = EmissionKernels.build_cooling_tables(; backend=:cpu, precision=Float32)
+            rp = Float32.(rho); ep = Float32.(e)
+            hp = Float32.(HII); mp = Float32.(H2I)
+            CK.solve_chem_analytic!(rp, ep, hp, mp; uu..., rate_tables=rt32,
+                                    cool_tables=ct32, backend=:cpu, precision=Float32)
+
+            rg = Metal.MtlArray(Float32.(rho)); eg = Metal.MtlArray(Float32.(e))
+            hg = Metal.MtlArray(Float32.(HII)); mg = Metal.MtlArray(Float32.(H2I))
+            CK.solve_chem_analytic_device!(rg, eg, hg, mg; uu...,
+                                           backend=:metal, precision=Float32)
+            @test isapprox(Array(eg), ep; rtol=5e-4)
+            @test isapprox(Array(hg), hp; rtol=5e-4)
+            @test isapprox(Array(mg), mp; rtol=2e-3)
+        end
     end
 end
 

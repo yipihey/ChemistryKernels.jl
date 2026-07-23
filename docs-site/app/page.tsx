@@ -254,7 +254,7 @@ export default function Home() {
           <div>
             <p className="kicker">More resolution for the same machine</p>
             <h1>From recombination<br />to the first stars.</h1>
-            <p className="hero-lede">The Abel–Anninos primordial network, redesigned around a two-species 16-bit production state: about 16× less chemistry memory, dramatically wider redshift coverage, and CPU/GPU paths engineered for billions of cell updates per second.</p>
+            <p className="hero-lede">The Abel–Anninos primordial network, redesigned around a two-species 16-bit production state. The complete network is the production path: about 16× less chemistry memory, dramatically wider redshift coverage, and high-throughput CPU/GPU execution without giving up the general chemistry.</p>
             <div className="hero-actions"><a className="primary" href="#usage">Run the first zone</a><a href="#rates">Explore every rate ↓</a></div>
           </div>
           <div className="hero-figure" aria-label="ChemistryKernels capability summary">
@@ -262,14 +262,14 @@ export default function Home() {
             <div className="core"><span>H</span><b>H₂</b><small>HD</small></div>
             <div className="callout callout-a"><b>≈16× smaller</b><span>chemistry-state memory</span></div>
             <div className="callout callout-b"><b>z = 0–8000</b><span>validated cosmology paths</span></div>
-            <div className="callout callout-c"><b>≈4 Gcell s⁻¹</b><span>A6000 analytic reference</span></div>
+            <div className="callout callout-c"><b>≈256 Mcell s⁻¹</b><span>full Metal network · dense H₂</span></div>
           </div>
         </div>
         <div className="metric-strip">
           <div><strong>≈16×</strong><span>less chemistry memory<br />2×UInt16 vs 9×Float64</span></div>
           <div><strong>≈8×</strong><span>less total memory<br />ABN-style first-star runs</span></div>
           <div><strong>&lt;0.1%</strong><span>H recombination error<br />z = 700–1100</span></div>
-          <div><strong>≈4 Gcell/s</strong><span>analytic reference<br />CPU and GPU kernels</span></div>
+          <div><strong>≈256 Mcell/s</strong><span>full-network reference<br />dense H₂ · Apple GPU</span></div>
         </div>
       </section>
 
@@ -344,7 +344,7 @@ export default function Home() {
 
       <section className="section solver-section" id="solver">
         <div className="section-label">03 · Time integration</div>
-        <div className="split-heading"><h2>Stiff where it must be.<br />Closed-form where it can be.</h2><p>Two production solvers share the same rates and thermal physics. The full path is a robust backward-Euler network with adaptive per-cell subcycling. The analytic path replaces the stiffest high-redshift pieces with exact updates and sharply reduces iteration count and warp divergence.</p></div>
+        <div className="split-heading"><h2>One production path.<br />The complete network.</h2><p><code>solve_chem!</code> is both the most accurate and the recommended fast path. Its backward-Euler network, adaptive per-cell subcycling, rate tables, compact state, and accelerator kernels cover the general model without requiring users to select a reduced chemistry regime.</p></div>
         <div className="solver-flow" aria-label="Solver sequence">
           <div><b>01</b><strong>Reconstruct</strong><span>T, H I, e⁻, fast species</span></div><i>→</i>
           <div><b>02</b><strong>Evaluate</strong><span>rates, cooling, radiation</span></div><i>→</i>
@@ -358,23 +358,24 @@ export default function Home() {
           <article><span className="overline">Compton split</span><div className="equation">de/dt = −K<sub>C</sub>(e − e<sub>CMB</sub>) + q̇<sub>rest</sub></div><p>When K<sub>C</sub>Δt &gt; 1, the stiff CMB exchange is integrated implicitly in the full solver. The analytic solver uses the exponential solution, so Compton locking does not dictate the step.</p></article>
         </div>
         <div className="fast-panel">
-          <div className="fast-title"><span>FAST ANALYTIC PATH</span><h3>Closed forms inside a deliberately smaller physics envelope.</h3><p><code>evolve_cell_analytic</code> advances primordial H + H₂. It assumes cell density and external radiation are fixed during each chemistry call, reconstructs H I and electrons by conservation, and closes H⁻/H₂⁺ in instantaneous quasi-steady state.</p></div>
+          <div className="fast-title"><span>ANALYTIC METHODS · REFERENCE ONLY</span><h3>Closed forms retained for scientific and historical interest.</h3><p><code>evolve_cell_analytic</code> is a reduced primordial H + H₂ method. It remains documented because its Riccati, Compton, and equilibrium closures are useful for controlled comparisons and method development—not because applications need a second production solver.</p></div>
           <div className="fast-steps">
-            <div><b>A</b><h4>Energy</h4><p>Compton exchange is an exact exponential. Non-Compton cooling is frozen over the substep and integrated as a source; only that source and the Compton transition limit the step.</p></div>
+            <div><b>A</b><h4>Energy</h4><p>Compton exchange is an exact exponential. Non-Compton cooling is frozen over each substep, with thermal, Compton-transition, and H₂-relaxation guards refreshing the coefficients.</p></div>
             <div><b>B</b><h4>Ionization</h4><p>An exact linear-source Riccati update balances case-B/Peebles recombination against CMB photoionization, electron impact, and H–H/H–He ionization.</p></div>
-            <div><b>C</b><h4>Molecules</h4><p>H⁻ and H₂⁺ are algebraic. H₂ formation integrates H I depletion analytically, then a backward-Euler sink applies H/H⁺/e⁻ collisional dissociation.</p></div>
+            <div><b>C</b><h4>Molecules</h4><p>H⁻ and H₂⁺ are algebraic. H₂ uses the same coupled source/sink backward-Euler balance as the full network, including three-body formation and collisional dissociation.</p></div>
           </div>
-          <div className="fast-foot"><span><b>Use it for</b> recombination-era volumes, primordial IGM, and the H₂-cooled minihalo envelope</span><span><b>Use the full path for</b> HD, dust, metals, UVB heating, and strongly non-equilibrium shocks or dense cores</span></div>
+          <div className="fast-foot"><span><b>Retained for</b> regression studies, controlled reduced-model experiments, and inspection of the closed-form derivations</span><span><b>Production recommendation</b> use <code>solve_chem!</code> for all new simulations</span></div>
         </div>
         <div className="analytic-contract">
-          <div className="analytic-assumptions"><span className="overline">MODEL ASSUMPTIONS</span><h3>What “analytic” does—and does not—mean</h3><ul><li>The rate coefficients are held at the substep state; the species updates themselves are closed form.</li><li>Charge neutrality supplies n<sub>e</sub>. Helium is neutral in cold collapse, stateless Saha in hot gas, or an explicitly carried He II abundance in the high-z path.</li><li>H⁻ and H₂⁺ must remain faster than the resolved H II/H₂ evolution. The path is not a non-equilibrium intermediate-species solver.</li><li><code>dtfrac</code> controls thermal/rate re-evaluation accuracy, not stability of the Riccati or Compton solutions.</li></ul><a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl">Read the closed-form kernel ↗</a></div>
+          <div className="analytic-assumptions"><span className="overline">REFERENCE MODEL ASSUMPTIONS</span><h3>What “analytic” does—and does not—mean</h3><ul><li>The rate coefficients are held at the substep state; the species updates themselves are closed form.</li><li>Charge neutrality supplies n<sub>e</sub>. Helium is neutral in cold collapse, stateless Saha in hot gas, or an explicitly carried He II abundance in the high-z path.</li><li>H⁻ and H₂⁺ must remain faster than the resolved H II/H₂ evolution. The path is not a non-equilibrium intermediate-species solver.</li><li><code>dtfrac</code> controls thermal/rate re-evaluation accuracy, not stability of the Riccati or Compton solutions.</li><li>The reduced path excludes HD, dust, metals, and the general UV background.</li></ul><a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl">Read the closed-form kernel ↗</a></div>
           <div className="analytic-table-wrap"><table className="analytic-table"><thead><tr><th>Path</th><th>Measured envelope</th><th>Interpretation</th></tr></thead><tbody>
             <tr><td><code>analytic!</code></td><td>Mean IGM, z=1200→20</td><td>At z=20: H II and energy within 5% of the full network; H₂ within a factor of three.</td></tr>
             <tr><td><code>analytic!</code></td><td>z=25 collapse, n<sub>H</sub> to 10⁴ cm⁻³</td><td>H II within 5%, H₂ within 25%, and a 60–200 K terminal-temperature gate.</td></tr>
             <tr><td><code>analytic!</code> + RECFAST-v2</td><td>z=900–1300</td><td>&lt;1% through the z=1000–1100 knee and &lt;1.5% across the tested wider window.</td></tr>
             <tr><td>carried He II</td><td>z=1900–8000</td><td>Saha at fully ionized epochs; HyRec-derived He I freeze-out below z≈4500, with the stated comparison gates in §05.</td></tr>
+            <tr><td><code>analytic!</code></td><td>n<sub>H</sub>=10¹²–10¹⁶ cm⁻³</td><td>Selected three-body formation and dissociation states agree with the full path to 1.5% in H₂ and 0.5% in energy.</td></tr>
             <tr><td><code>analytic_mixing!</code></td><td>recombination-era closure</td><td>Same reduced state plus host-calibrated f<sub>α</sub> and smoothing scale; f<sub>α</sub>=0 is the canonical local kernel.</td></tr>
-          </tbody></table><p><b>These are validation windows, not hard runtime guards.</b> Outside them, compare against <code>solve_chem!</code>. For collapse approaching three-body densities (n<sub>H</sub> ∼ 10⁸ cm⁻³), switch early with <code>solve_chem_hybrid_device_u16!</code> and validate the chosen <code>rho_switch</code> for the problem.</p></div>
+          </tbody></table><p><b>These comparisons document the method; they are not production recommendations.</b> Use <code>solve_chem!</code> for new applications. It is fast enough that the reduced and hybrid analytic paths are no longer needed to obtain production throughput, while remaining more general and more accurate.</p></div>
         </div>
         <div className="mode-grid">
           <article><h3>Rate tables</h3><p>Optional monotonic log–log interpolation replaces ≈25 transcendental fits. It can cut rate-building cost 3–5× on GPU; direct fits remain the reference.</p><span>GPU hot path</span></article>
@@ -438,29 +439,29 @@ export default function Home() {
 
       <section className="section performance-section">
         <div className="section-label">06 · Execution & storage</div>
-        <div className="split-heading"><h2>Throughput starts by moving less state.</h2><p>Per-cell independence maps directly to accelerators, but the larger gains come from doing less work and moving less memory per cell: two compact evolved species, closed-form stiff updates, uniform iteration counts, and optional rate tables.</p></div>
-        <div className="perf-hero"><div><strong>≈4</strong><span>Gcell s⁻¹</span><p>analytic H + H₂ path<br />RTX A6000 · 128³ · Float32</p></div><div className="bars"><div><span>analytic</span><i style={{width:"100%"}} /><b>4×</b></div><div><span>full network</span><i style={{width:"25%"}} /><b>1×</b></div><small>Repository benchmark reference; hardware and state distribution determine realized throughput.</small></div></div>
+        <div className="split-heading"><h2>The full network is<br />the fast path.</h2><p>Compact evolved state, persistent rate tables, zero-copy device arrays, and independent per-cell kernels make the complete network fast enough for production. There is no need to trade away HD, dust, metals, UV backgrounds, or general non-equilibrium behavior to obtain accelerator throughput.</p></div>
+        <div className="perf-hero"><div><strong>≈256</strong><span>Mcell s⁻¹</span><p>full network · dense H₂ formation<br />Apple GPU · 262,144 cells · Float32</p></div><div className="bars"><div><span>full · 1500 K formation</span><i style={{width:"93%"}} /><b>256</b></div><div><span>full · 3500 K equilibrium</span><i style={{width:"100%"}} /><b>274</b></div><div><span>full · 5000 K dissociation</span><i style={{width:"6%"}} /><b>15.2</b></div><small>Mcell/s from the repository dense-H₂ benchmark. Thermal subcycling governs the hot case; hardware and state distribution determine realized throughput.</small></div></div>
         <div className="storage-card"><div><span className="overline">THE KEY MEMORY RESULT</span><h3>Nine Float64 fields become two UInt16 fields.</h3><p>The minimal primordial production state reports about 16× less chemistry memory than the original Abel-network layout, and about 8× less total memory in ABN-style first-star calculations.</p></div><div className="bytes"><div className="float legacy"><b>Original model</b>{Array.from({length: 9}).map((_, i) => <i key={i} />)}<span>9 × Float64</span></div><div className="u16 compact"><b>Production path</b><i/><i/><span>2 × UInt16</span></div></div><dl><div><dt>chemistry state</dt><dd>≈16× smaller</dd></div><div><dt>ABN total</dt><dd>≈8× smaller</dd></div><div><dt>encoded range</dt><dd>33.1 dex</dd></div><div><dt>quantization</dt><dd>≈0.12% / ULP</dd></div></dl></div>
       </section>
 
       <section className="section usage-section" id="usage">
         <div className="section-label">07 · Usage</div>
-        <div className="split-heading"><h2>Start with one call.<br />Specialize only when it pays.</h2><p>Arrays may be any length and are updated in place. All density fields use the same host code units; <code>density_units</code>, <code>length_units</code>, and <code>time_units</code> define the conversion to CGS inside the kernel.</p></div>
+        <div className="split-heading"><h2>Start—and stay—with<br />the full network.</h2><p><code>solve_chem!</code> is the production API on CPU and GPU. Arrays may be any length and are updated in place. All density fields use the same host code units; <code>density_units</code>, <code>length_units</code>, and <code>time_units</code> define the conversion to CGS inside the kernel.</p></div>
         <div className="code-tabs">
           <article><div className="code-heading"><span>01</span><h3>CPU / portable baseline</h3></div><CodeBlock>{quickStart}</CodeBlock></article>
           <article><div className="code-heading"><span>02</span><h3>Zero-copy CUDA production</h3></div><CodeBlock>{gpuStart}</CodeBlock></article>
           <article><div className="code-heading"><span>03</span><h3>Lyα-mixing recombination</h3></div><CodeBlock>{mixingStart}</CodeBlock></article>
         </div>
         <div className="decision-card"><h3>Choose a solver</h3><div className="decision-grid">
-          <div><span>Need all enabled physics?</span><b>solve_chem!</b><p>HD, dust, metals, general thermal evolution.</p></div>
-          <div><span>Primordial H/H₂ and speed first?</span><b>solve_chem_analytic!</b><p>Closed-form chemistry and Compton exchange.</p></div>
-          <div><span>Inhomogeneous cosmic recombination?</span><b>solve_chem_mixing!</b><p>Local/full solver with Lyα density mixing.</p></div>
-          <div><span>Same, but throughput critical?</span><b>solve_chem_analytic_mixing!</b><p>Analytic primordial path plus mixed escape.</p></div>
+          <div><span>Any production simulation</span><b>solve_chem!</b><p>Fast, accurate, general full-network evolution on CPU or GPU.</p></div>
+          <div><span>Inhomogeneous cosmic recombination</span><b>solve_chem_mixing!</b><p>The full solver with the Lyα density-mixing closure.</p></div>
+          <div><span>Studying reduced closed forms</span><b>solve_chem_analytic!</b><p>Reference and regression work only; not recommended for production.</p></div>
+          <div><span>Studying analytic Lyα mixing</span><b>solve_chem_analytic_mixing!</b><p>Reference comparison only; use the full mixing solver in applications.</p></div>
         </div></div>
         <div className="api-grid">
           <article><h3>Units that must be right</h3><ul><li><code>e</code> is specific internal energy, not an energy density.</li><li><code>H2I</code> stores 2 n(H₂)m<sub>H</sub>; <code>HDI</code> stores 3 n(HD)m<sub>H</sub>.</li><li><code>a_value</code> sets z = 1/a − 1 and therefore T<sub>CMB</sub>.</li><li>Pass <code>adot_over_a</code> when the host owns the exact cosmological step.</li></ul></article>
           <article><h3>Production checks</h3><ul><li>Use Float64 CPU as the scientific reference before moving to Float32 GPU.</li><li>Sort cells by temperature if warp divergence is visible.</li><li>Treat <code>itcap</code> as a watchdog; resume unfinished stiff cells later.</li><li>Regenerate rate/cooling tables for the target backend and precision.</li></ul></article>
-          <article><h3>Known boundaries</h3><ul><li>Fine-structure metal cooling tapers to zero from 10⁴–2×10⁴ K.</li><li>No full high-temperature tabulated metal cooling or RT heating.</li><li>Default helium equilibrium has a quantified z≈2000–2500 freeze-out error.</li><li>The analytic H₂ path is not the general shock/dissociation solver.</li></ul></article>
+          <article><h3>Known boundaries</h3><ul><li>Fine-structure metal cooling tapers to zero from 10⁴–2×10⁴ K.</li><li>No full high-temperature tabulated metal cooling or RT heating.</li><li>Default helium equilibrium has a quantified z≈2000–2500 freeze-out error.</li><li>Analytic and hybrid paths are retained for reference, not recommended for production.</li></ul></article>
         </div>
       </section>
 
@@ -506,7 +507,7 @@ export default function Home() {
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/solve.jl"><b>Public drivers</b><span>src/solve.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/subcycle.jl"><b>Full ODE subcycling</b><span>src/subcycle.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/network_step.jl"><b>Backward-Euler sweep</b><span>src/network_step.jl ↗</span></a>
-          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl"><b>Analytic &amp; hybrid paths</b><span>src/fast.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/fast.jl"><b>Analytic reference paths</b><span>src/fast.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/recombination_clumping.jl"><b>RECFAST &amp; Lyα mixing</b><span>src/recombination_clumping.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/log2_species.jl"><b>UInt16 codec</b><span>src/log2_species.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_atomic.jl"><b>Atomic rates</b><span>src/rates_atomic.jl ↗</span></a>

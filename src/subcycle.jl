@@ -161,11 +161,12 @@ Dust physics is enabled by `dust = true`, which requires:
                              max_substep_fraction::Real = 0.5,
                              species_limiter::Val{SL} = Val(:electron),
                              h2_fraction_floor::Real = 1.0e-12,
+                             stiff_h2_pair::Val{SP} = Val(true),
                              diagnostics::Val{D} = Val(false),
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
                              A_V::Real = 0.0, N_H::Real = 0.0,
-                             N_H2::Real = 0.0) where {SL,D}
+                             N_H2::Real = 0.0) where {SL,SP,D}
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     # domain guard (match evolve_cell_analytic/fast): f16/f32 hydro + dual-energy
@@ -333,7 +334,27 @@ Dust physics is enabled by `dust = true`, which requires:
         else
             error("unknown chemistry species limiter")
         end
-        dtit = min(dt_species, rem, R(max_substep_fraction)*dt)
+        dt_macro = min(rem, R(max_substep_fraction)*dt)
+        # Resolve a moderately stiff H₂ formation/dissociation pair even when
+        # its net rate is near zero. A net fractional limiter cannot see this
+        # equilibrium cancellation, yet freezing nHI and T across the ordered
+        # sweep gives an O(νΔt) trajectory error. Extremely stiff spans retain
+        # the direct conservative equilibrium closure in network_step instead.
+        h2_pair_frequency = R(2)*K.k22*yHI^2 + K.k13*yHI +
+                            K.k11*yHII + K.k12*yde
+        h2_source = R(2)*(K.k8*yHM_rate*yHI +
+                          K.k10*yH2II_rate*yHI/R(2) +
+                          K.k19*yH2II_rate*yHM_rate/R(2) +
+                          K.k22*yHI*yHI^2) +
+                    R(2)*dust_rates.k_h2d*yHI^2
+        h2_loss = K.k13*yHI + K.k11*yHII + K.k12*yde +
+                  dust_rates.k_lw
+        direct_h2_pair = SP &&
+            _use_threebody_h2_equilibrium(yHI, yH2I, K.k22, K.k13,
+                                          h2_source, h2_loss, dt_macro)
+        dt_h2_pair = SP && !direct_h2_pair ?
+                     R(0.2) / max(h2_pair_frequency, tiny) : typemax(R)
+        dtit = min(dt_species, dt_h2_pair, dt_macro)
 
         # energy sub-step + CMB-Compton stiffness split
         edot_c    = -c1 * (T - Tc) * yde            # Compton part (volumetric)
@@ -369,7 +390,8 @@ Dust physics is enabled by `dust = true`, which requires:
         # species update (one backward-Euler sweep)
         s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                          yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
-                         dust_rates = dust_rates, intermediates_current=Val(true))
+                         dust_rates = dust_rates, intermediates_current=Val(true),
+                         stiff_h2_pair=stiff_h2_pair)
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
 

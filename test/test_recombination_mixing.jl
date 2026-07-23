@@ -22,6 +22,16 @@ include("recomb_helpers.jl")
 
 @testset "recombination_mixing" begin
 
+@testset "RECFAST Gaussian precision genericity" begin
+    for z in (700.0, 836.0, 1100.0, 1449.0, 2000.0)
+        g64 = recfast_gauss_factor(z)
+        g32 = recfast_gauss_factor(Float32(z))
+        @test g64 isa Float64
+        @test g32 isa Float32
+        @test isapprox(Float64(g32), g64; rtol=8eps(Float32))
+    end
+end
+
 @testset "homogeneous_hyrec" begin
     # Part A: solve_chem_mixing!(FA_ZERO) must be bit-identical to solve_chem!
     n    = 8

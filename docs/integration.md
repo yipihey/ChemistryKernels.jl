@@ -46,7 +46,31 @@ It sub-cycles each cell internally (10%-change limiter, stiff CMB-Compton split)
 `e`, `HII`, `H2I` (and `HDI`) back in place. It is **per-cell independent** — trivially
 parallel; the kernel runs the whole array on the chosen backend.
 
-## Analytic and hybrid paths
+## Full and reduced analytic paths
+
+Use `solve_chem!` as the default, including primordial collapse into the
+three-body regime. The full network now refreshes its algebraic intermediaries
+every substep and stabilizes the asymptotic pair
+
+```text
+3 H ⇌ H₂ + H
+```
+
+without changing the advected state. When three-body formation (`k22`) and
+H-impact dissociation (`k13`) supply more than 99% of the instantaneous H₂
+activity and a substep spans at least ten pair-relaxation times, the network
+places H₂ on the conservative fixed point
+
+```text
+2 k22 nHI³ = k13 nHI yH2,       nHI + yH2 = constant,
+```
+
+where `yH2 = 2 n(H₂)`. This removes the fully molecular absorbing state of a
+lagged-HI backward-Euler sweep. Competing H⁻, H₂⁺, ion, LW, or dust channels
+automatically keep the general network update active. The implementation and
+Float64/Float32 regressions are in
+[`src/network_step.jl`](../src/network_step.jl) and
+[`test/test_dense_threebody.jl`](../test/test_dense_threebody.jl).
 
 `solve_chem_analytic!` is a reduced primordial H + H₂ solver. It reconstructs H I and
 electrons by conservation, closes H⁻ and H₂⁺ in quasi-steady state, integrates H II with a
@@ -63,13 +87,41 @@ The current regression envelope is:
 | minihalo collapse | z=25, nH through 10⁴ cm⁻³ | H II within 5%, H₂ within 25%, terminal T=60–200 K |
 | H recombination | z=900–1300 | <1% at z=1000–1100; <1.5% over the tested wider window |
 | helium-aware recombination | z=1900–8000 | Saha at fully ionized epochs plus carried He II through HyRec-derived He I freeze-out |
+| three-body formation | nH=10¹² cm⁻³, T=1500 K | H₂ within 1.5%; energy within 0.5% |
+| three-body/dissociation balance | nH=10¹⁶ cm⁻³, T=3500 and 5000 K | H₂ within 1.5%; energy within 0.5% |
 
-These are validation windows, not runtime cutoffs. Compare with `solve_chem!` when applying
-the analytic closure elsewhere. For collapse approaching three-body densities
-(nH≈10⁸ cm⁻³), `solve_chem_hybrid_device_u16!` can switch dense cells to the full network;
-validate `rho_switch` for the target problem. `solve_chem_analytic_mixing!` adds the
-host-calibrated Lyα escape-density closure; with `f_alpha=0` it reduces to the local
-analytic kernel.
+These are validation windows, not runtime cutoffs, but they are the evidence boundary.
+The dense comparison is now an equivalent solve: the analytic path uses the same
+coupled H₂ source/sink backward-Euler update as the full network and resolves
+the pair-relaxation time when frozen coefficients would otherwise move the
+formation/dissociation fixed point.
+
+For 262,144 Float32 cells on the current Apple GPU, the analytic/full results are
+`fH2=6.199×10⁻⁴ / 6.189×10⁻⁴` at `nH=10¹² cm⁻³`, 1500 K;
+`0.7127 / 0.7124` at `nH=10¹⁶ cm⁻³`, 3500 K; and
+`0.03666 / 0.03699` at `nH=10¹⁶ cm⁻³`, 5000 K. Energy differs by at most
+0.2% in these cases. In the recorded run, the analytic path is respectively
+1.98×, 1.10×, and 5.85× faster; the full path sustains approximately 256,
+274, and 15.2 Mcell/s. The first two kernels complete in about one millisecond
+and their ratio is correspondingly sensitive to device scheduling. On the CPU
+used for the same run, the analytic speed-ups are 2.46×, 2.51×, and 1.12×.
+
+At `nH=10¹⁸ cm⁻³`, the full Metal path reaches about 237 Mcell/s at 3500 K;
+the coupled 5000 K thermal trajectory falls below 1 Mcell/s because thermal
+subcycling dominates. The analytic path can exhaust its subcycle budget at
+that density and is not part of the validated comparison. Reproduce both the
+throughput and final-state comparison with
+[`benchmark/dense_threebody.jl`](../benchmark/dense_threebody.jl); hardware and the
+thermal trajectory determine absolute throughput.
+
+The chemistry fixed point remains valid above the density where the present thermal model
+is complete. The built-in H₂ cooling has the low-density/LTE collisional bridge but no
+column-dependent H₂ line trapping or collision-induced continuum treatment. Supply those
+effects in the host, or validate the thermal trajectory separately, before interpreting a
+one-zone result at `nH≈10¹⁸ cm⁻³`.
+
+`solve_chem_analytic_mixing!` adds the host-calibrated Lyα escape-density closure; with
+`f_alpha=0` it reduces to the local analytic kernel.
 
 Implementation and validation: [`src/fast.jl`](../src/fast.jl),
 [`src/recombination_clumping.jl`](../src/recombination_clumping.jl), and
