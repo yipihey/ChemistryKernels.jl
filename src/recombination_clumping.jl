@@ -164,12 +164,16 @@ for k2. All other rates are identical. Pure.
     # NOT spuriously Saha-ionise UV-heated low-z gas where T≫Trad.
     k_b1s  = beta1s_freq(Trad) * k2_val / (recfast_alpha(T) * R(1.0e6))
     she1, she2 = helium_saha_pair(Trad)
+    kHeH_ra = kHeH_ra_spont(T) +
+              kHeH_ra_stim_base(T) * HeH_stim_factor(Trad)
     base = (; k1=k1(T), k2=k2_val,
             k3=k3(T), k4=k4(T), k5=k5(T),
             k6=k6(T), k7=k7(T), k8=k8(T), k9=k9(T), k10=k10(T), k11=k11(T),
             k12=k12(T), k13=k13(T), k14=k14(T), k15=k15(T), k16=k16(T), k17=k17(T),
             k18=k18(T), k19=k19(T), k22=k22(T), k57=k57(T), k58=k58(T),
             k27=k27_cmb(Trad), k28=k28_cmb(Trad), k_beta1s=k_b1s,
+            kHeH_ra=kHeH_ra, kHeH_H=kHeH_H(T), kHeH_e=kHeH_e(T),
+            gamma_HeH=gamma_HeH_cmb(Trad),
             she1=she1, she2=she2)
     deuterium || return base
     return merge(base, (; k50=k50(T), k51=k51(T), k52=k52(T), k53=k53(T),
@@ -215,11 +219,14 @@ the local and smoothed neutral densities. This is the production GPU hot path.
     k12v = Tev <= R(0.3)  ? zero(R) : rd(13)
     k13v = Tev <= R(0.3)  ? zero(R) : rd(14)
     k14v = Tev <= R(0.04) ? zero(R) : rd(15)
+    kHeH_ra = rd(31) + rd(32) * cr.HeH_stim
     return (; k1=rd(3), k2=k2_val, k3=k3v, k4=rd(5), k5=k5v, k6=rd(7),
             k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=k11v, k12=k12v,
             k13=k13v, k14=k14v, k15=rd(16), k16=rd(17), k17=rd(18),
             k18=rd(19), k19=rd(20), k22=rd(21), k57=rd(22), k58=rd(23),
-            k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s, she1=she1, she2=she2)
+            k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s,
+            kHeH_ra=kHeH_ra, kHeH_H=rd(33), kHeH_e=rd(34),
+            gamma_HeH=cr.gamma_HeH, she1=she1, she2=she2)
 end
 
 # ── Fast analytic Ly-alpha mixing path ───────────────────────────────────────
@@ -538,7 +545,8 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
                                   yHeI, zeroR, zeroR, K; GamHI = gHI)
         dt_electron = _step_f(yde, dedot, frac)
         dt_h2 = if SL === :h2 || D
-            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate, K)
+            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
+                            yHeI/R(4), K)
             h2_reference = max(yH2I, R(h2_fraction_floor) * nH_h)
             _step_f(h2_reference, h2dot, frac)
         else

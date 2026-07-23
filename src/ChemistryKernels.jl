@@ -6,8 +6,10 @@ deuterium chemistry/cooling network of **Abel, Anninos, Zhang & Norman (1997,
 New Astronomy 2, 181)** and **Anninos, Zhang, Abel & Norman (1997, New Astronomy
 2, 209)** — the original Enzo primordial chemistry (the same physics later
 packaged as the `grackle` library).  Reduced model: advect HII, H2I, HDI;
-H⁻/H₂⁺/D⁺ in algebraic equilibrium; helium in ionisation equilibrium (or advected
-He⁺); nₑ from charge conservation; primordial only by default.
+H⁻/H₂⁺/HeH⁺/D⁺ in algebraic equilibrium; helium in ionisation equilibrium (or
+advected He⁺); nₑ from charge conservation; primordial only by default. The
+default H₂ network includes the Hirata & Padmanabhan (2006) HeH⁺ catalytic
+route with the updated Bovino et al. (2011) low-temperature proton-transfer rate.
 
 Dust physics (enabled by `dust=true` in `solve_chem!` / `evolve_cell`): H₂
 formation on grain surfaces (Cazaux & Tielens 2004), grain-assisted HII

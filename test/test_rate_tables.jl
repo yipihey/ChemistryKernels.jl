@@ -78,6 +78,20 @@ _relmax(a, b) = maximum(abs.(a .- b)) / (maximum(abs.(b)) + eps())
     end
     @test smoothmax < 2e-3
 
+    # HeH⁺ is a cold-gas channel. Test its complete assembled rates over the
+    # relevant 1–10⁴ K range; above this, radiative association is exponentially
+    # dead and relative interpolation error has no physical meaning.
+    hehmax = 0.0
+    for T in 10.0 .^ range(0.0, 4.0, length = 2001)
+        a = _CK.build_rates(T, Trad, 0.1, Hz)
+        b = _CK.table_rates(rt, T, 0.1, Hz, cr)
+        for f in (:kHeH_ra, :kHeH_H, :kHeH_e)
+            hehmax = max(hehmax, abs(getfield(b, f) - getfield(a, f)) /
+                                 (abs(getfield(a, f)) + 1e-300))
+        end
+    end
+    @test hehmax < 2e-3
+
     # 4. interpolation identity on a grid node -------------------------------------------
     Tnode = 10.0 ^ (512 * 9.0 / (rt.N - 1))
     an = _CK.build_rates(Tnode, Trad, 0.1, Hz; deuterium = true)

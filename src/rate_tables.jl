@@ -27,7 +27,8 @@ const _RT_COLS = (:aB, :bet,
                   :k1, :k3, :k4, :k5, :k6,
                   :k7, :k8, :k9, :k10, :k11, :k12, :k13, :k14, :k15,
                   :k16, :k17, :k18, :k19, :k22, :k57, :k58,
-                  :k50, :k51, :k52, :k53, :k54, :k55, :k56)
+                  :k50, :k51, :k52, :k53, :k54, :k55, :k56,
+                  :kHeH_ra_spont, :kHeH_ra_stim_base, :kHeH_H, :kHeH_e)
 const _NRT = length(_RT_COLS)
 
 """
@@ -51,7 +52,7 @@ Adapt.@adapt_structure RateTables
 
 Evaluate every tabulated rate ([`_RT_COLS`](@ref)) on a uniform `log₁₀T` grid of `N`
 points over `[Tmin, Tmax]` K, store `log₁₀(rate)`, and upload to `backend`.  The default
-`N=1024` (≈0.0088 dex over 1–10⁹ K, ~0.24 MB) keeps the curved (exp) rates to ≲1% — far
+`N=1024` (≈0.0088 dex over 1–10⁹ K, ~0.28 MB in Float64) keeps the curved (exp) rates to ≲1% — far
 inside the ~10–20% physical uncertainty of the analytic fits themselves — while power-law
 rates are exact at any spacing; the small table stays comfortably L2-resident.
 """
@@ -69,7 +70,8 @@ function build_rate_tables(; Tmin::Real = 1.0, Tmax::Real = 1.0e9, N::Int = 1024
                 k1(Tj), k3(Tj), k4(Tj), k5(Tj), k6(Tj),
                 k7(Tj), k8(Tj), k9(Tj), k10(Tj), k11(Tj), k12(Tj), k13(Tj), k14(Tj), k15(Tj),
                 k16(Tj), k17(Tj), k18(Tj), k19(Tj), k22(Tj), k57(Tj), k58(Tj),
-                k50(Tj), k51(Tj), k52(Tj), k53(Tj), k54(Tj), k55(Tj), k56(Tj))
+                k50(Tj), k51(Tj), k52(Tj), k53(Tj), k54(Tj), k55(Tj), k56(Tj),
+                kHeH_ra_spont(Tj), kHeH_ra_stim_base(Tj), kHeH_H(Tj), kHeH_e(Tj))
         @inbounds for c in 1:_NRT
             v = vals[c]
             M[j, c] = v > zero(R) ? log10(v) : -R(Inf)
@@ -133,11 +135,14 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
     k12v = Tev <= R(0.3)  ? zero(R) : rd(13)
     k13v = Tev <= R(0.3)  ? zero(R) : rd(14)
     k14v = Tev <= R(0.04) ? zero(R) : rd(15)
+    kHeH_ra = rd(31) + rd(32) * cr.HeH_stim
     base = (; k1=rd(3), k2=k2_val, k3=k3v, k4=rd(5), k5=k5v, k6=rd(7),
             k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=k11v, k12=k12v,
             k13=k13v, k14=k14v, k15=rd(16), k16=rd(17), k17=rd(18), k18=rd(19),
             k19=rd(20), k22=rd(21), k57=rd(22), k58=rd(23),
-            k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s, she1=she1, she2=she2)
+            k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s,
+            kHeH_ra=kHeH_ra, kHeH_H=rd(33), kHeH_e=rd(34),
+            gamma_HeH=cr.gamma_HeH, she1=she1, she2=she2)
     deuterium || return base
     return merge(base, (; k50=rd(24), k51=rd(25), k52=rd(26), k53=rd(27),
                         k54=rd(28), k55=rd(29), k56=rd(30)))

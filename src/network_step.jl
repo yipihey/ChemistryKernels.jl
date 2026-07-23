@@ -145,6 +145,13 @@ transcription for standalone callers.
     k9=K.k9; k10=K.k10; k11=K.k11; k12=K.k12; k13=K.k13; k14=K.k14; k15=K.k15
     k16=K.k16; k17=K.k17; k18=K.k18; k19=K.k19; k22=K.k22; k57=K.k57; k58=K.k58
     k27=K.k27; k28=K.k28; k_beta1s=K.k_beta1s
+    # `network_step` is also a low-level public primitive used with hand-built
+    # pinned rate bundles. Missing HeH⁺ keys mean an explicitly disabled
+    # channel; every production assembler supplies the non-zero defaults.
+    kHeH_ra=get(K, :kHeH_ra, z)
+    kHeH_H=get(K, :kHeH_H, z)
+    kHeH_e=get(K, :kHeH_e, z)
+    gamma_HeH=get(K, :gamma_HeH, z)
 
     # ── (C) HI / HII / e⁻ / H2 with molecular terms ──────────────────────────
     # H⁻ and H₂⁺ are fast algebraic-equilibrium intermediaries. We evaluate them
@@ -175,6 +182,12 @@ transcription for standalone callers.
                                   k17, k18, k19, k28)
     end
     nH2II  = H2IIeq / two          # n(H₂⁺); H2IIeq carries the 2× mass-equiv convention
+    # Hirata & Padmanabhan (2006) HeH⁺ route. The newly produced H₂⁺ occupies
+    # low vibrational levels and overwhelmingly charge-transfers to H₂; treat
+    # the two-step sequence as a direct H₂ source. HeH⁺ itself remains a trace
+    # algebraic intermediate and therefore adds no advected/storage field.
+    nHeH = equilibrium_HeH(yHeI/four, yHII, yde, yHI,
+                           kHeH_ra, kHeH_H, kHeH_e, gamma_HeH)
 
     # 1,2) Coupled HI/HII update. At recombination redshifts the β₁s exchange is
     # extremely stiff. Updating HI and HII as two lagged fixed points makes the neutral
@@ -203,7 +216,8 @@ transcription for standalone callers.
     # 7) H2  (formation via H₂⁺, H⁻ channels and dust surface reactions;
     #     destruction via LW photodissociation when dust_rates supplied)
     sc_dust = dust_rates !== nothing ? two * dust_rates.k_h2d * yHI^2 : zero(R)
-    sc = two*(k8*yHM*yHI + k10*H2IIeq*yHI/two + k19*H2IIeq*yHM/two + k22*yHI*yHI^2) +
+    sc = two*(k8*yHM*yHI + k10*H2IIeq*yHI/two + k19*H2IIeq*yHM/two +
+              kHeH_H*nHeH*yHI + k22*yHI*yHI^2) +
          sc_dust
     ac_lw = dust_rates !== nothing ? dust_rates.k_lw : zero(R)
     ac = k13*yHI + k11*yHII + k12*yde + ac_lw

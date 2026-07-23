@@ -49,6 +49,8 @@ molecular_fns = [
     ("k15 · H⁻–H detach.", k15), ("k16 · mutual neutral.", k16),
     ("k17 · H⁻ + H → H₂", k17), ("k18 · H₂ dissoc. recomb.", k18),
     ("k19 · H₂ + H⁻", k19), ("k22 · three-body H₂", k22),
+    ("HeH⁺ radiative assoc.", kHeH_ra_spont),
+    ("HeH⁺ + H → H₂⁺", kHeH_H), ("HeH⁺ + e⁻", kHeH_e),
 ]
 molecular_rates = [series(n, f.(T)) for (n, f) in molecular_fns]
 
@@ -78,6 +80,7 @@ Trad = 2.725 .* (1 .+ z_cmb)
 cmb_rates = [
     series("k27 · H⁻ photodetach.", ChemistryKernels.k27_cmb.(Trad)),
     series("k28 · H₂⁺ photodissoc.", ChemistryKernels.k28_cmb.(Trad)),
+    series("HeH⁺ photodissoc.", ChemistryKernels.gamma_HeH_cmb.(Trad)),
     series("β₁s · H photoion.", beta1s_freq.(Trad)),
 ]
 
@@ -170,9 +173,9 @@ highz_curves = [
 datasets = [
     dataset("atomic-rates", "Atomic reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, atomic_rates,
             y_floor=1.0e-30),
-    dataset("molecular-rates", "H₂ / H⁻ reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, molecular_rates,
+    dataset("molecular-rates", "H₂ / H⁻ / HeH⁺ reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, molecular_rates,
             y_floor=1.0e-30,
-            note="k22 is a three-body coefficient (cm⁶ s⁻¹); it is included here for completeness."),
+            note="The plotted HeH⁺ association curve is spontaneous association; the solver also includes the CMB-stimulated term. k22 is a three-body coefficient (cm⁶ s⁻¹)."),
     dataset("deuterium-rates", "Deuterium reaction rates", "gas temperature · K", "rate coefficient · cm³ s⁻¹", T, deuterium_rates,
             y_floor=1.0e-30),
     dataset("atomic-cooling", "Atomic cooling coefficients", "gas temperature · K", "cooling coefficient · erg cm³ s⁻¹", T, atomic_cooling),

@@ -1,5 +1,6 @@
 using ChemistryKernels, Test
-using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII, helium_equilibrium
+using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_HeH,
+                        equilibrium_DII, helium_equilibrium
 
 # equilibrium.jl carries no closed-form grackle oracle (HM/H2II/DII are scratch in
 # the reduced run).  The transcription risk is purely STRUCTURAL — which rates,
@@ -8,6 +9,17 @@ using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII, heliu
 # INDEPENDENT literal re-evaluation of solve_rate_cool_g.F:2450-2520.  A wrong
 # k-index, a dropped factor, or a swapped species then fails immediately.
 @testset "equilibrium (pinned-rate transcription)" begin
+    # Published HeH⁺ coefficients: Schleicher et al. (2008) formation/recombination
+    # and Bovino et al. (2011) ab-initio proton transfer.
+    THeH = 300.0
+    @test ChemistryKernels.kHeH_ra_spont(THeH) ≈
+          8e-20 * (THeH/300)^(-0.24) * exp(-THeH/4000)
+    @test ChemistryKernels.kHeH_ra_stim_base(THeH) ≈
+          3.2e-20*THeH^1.8/(1 + 0.1*THeH^2.04)*exp(-THeH/4000)
+    @test ChemistryKernels.kHeH_H(THeH) ≈
+          4.3489e-10*THeH^0.110373*exp(-31.5396/THeH)
+    @test ChemistryKernels.kHeH_e(THeH) ≈ 3e-8*(THeH/300)^(-0.47)
+
     # distinct, non-degenerate values so any miswiring shifts the result
     yHI, yHII, yde, yHM, yH2I, yH2II = 0.7, 0.03, 0.03, 1.0e-9, 0.02, 1.0e-11
     yDI, yHDI = 6.8e-5*0.7, 1.0e-7
@@ -55,6 +67,14 @@ using ChemistryKernels: equilibrium_HM, equilibrium_H2II, equilibrium_DII, heliu
     # Disconnected exact-zero networks are valid equilibria, not 0/0 failures.
     @test equilibrium_HM(0.7, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 8)...) == 0.0
     @test equilibrium_H2II(0.7, 0.0, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 7)...) == 0.0
+
+    # HeH⁺: radiative association divided by proton-transfer,
+    # dissociative-recombination, and photodissociation losses.
+    nHeI, nHII, ne, nHI = 0.06, 2e-4, 2e-4, 0.75
+    kra, kH, ke, gph = 8e-20, 7e-10, 3e-8, 2e-11
+    refHeH = kra*nHeI*nHII / (kH*nHI + ke*ne + gph)
+    @test equilibrium_HeH(nHeI, nHII, ne, nHI, kra, kH, ke, gph) ≈ refHeH
+    @test equilibrium_HeH(nHeI, 0.0, ne, nHI, kra, kH, ke, gph) == 0.0
     @test equilibrium_DII(0.0, 0.0, 0.7, 0.0, 0.0, 0.0, ntuple(_ -> 0.0, 6)...) == 0.0
     he0 = helium_equilibrium(0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.08)
     @test he0 == (0.08, 0.0, 0.0)

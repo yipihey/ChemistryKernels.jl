@@ -20,9 +20,27 @@ internal energy. All densities are `ρ·x` in the host's *code units* (set by
 | `HeII` | He⁺ mass density (if `helium=true`, mixing path) | `4·n(He⁺)·m_H` |
 
 Neutral HI is reconstructed from conservation (`fh·ρ − HII − H2I`); nₑ from charge
-conservation; H⁻/H₂⁺/D⁺ and He stages from algebraic/ionization equilibrium. `fh` is the
+conservation; H⁻/H₂⁺/HeH⁺/D⁺ and He stages from algebraic/ionization equilibrium. `fh` is the
 hydrogen mass fraction (default 0.76). The redshift is `z = 1/a_value − 1`, which sets the
 CMB temperature for Compton and the cooling floor.
+
+The default gas-phase H₂ formation network includes all three charged-particle
+routes:
+
+```text
+H + e⁻ → H⁻ + γ;       H⁻ + H → H₂ + e⁻
+H + H⁺ → H₂⁺ + γ;      H₂⁺ + H → H₂ + H⁺
+He + H⁺ → HeH⁺ + γ;    HeH⁺ + H → He + H₂⁺ → H₂
+```
+
+The last route follows Hirata & Padmanabhan (2006). HeH⁺ is a trace,
+short-lived intermediary solved in quasi-steady state, so it adds no advected
+field and does not weaken the two-species storage advantage. Formation includes
+spontaneous and CMB-stimulated radiative association and both CMB
+photodissociation branches; destruction by electrons is included. The
+`HeH⁺ + H` coefficient uses the low-temperature ab-initio calculation of
+Bovino et al. (2011), frozen at its 1000 K validity boundary because this route
+is negligible in hot gas.
 
 ## Driving it
 

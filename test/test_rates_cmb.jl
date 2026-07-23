@@ -11,7 +11,7 @@ module UnitCMB
 end
 
 @testset "rates_cmb literal" begin
-    # Verify k27, k28, and comp2 against the literal formulas from
+    # Verify k27, k28, HeH⁺ radiation rates, and comp2 against the literal formulas.
     # solve_chemistry.c:158-160 and cool1d_multi_g.F:198-199.
     # There is no grackle oracle for these (they live in solve_chemistry.c, not
     # rate_functions.c), so the reference IS the literal formula.
@@ -21,6 +21,11 @@ end
         @test isapprox(UnitCMB.k27_cmb(Trad), 1.1e-1 * Trad^2.13 * exp(-8823.0 / Trad); rtol=1e-12)
         # k28: H2+ + γ_CMB → H + H+  (solve_chemistry.c:160)
         @test isapprox(UnitCMB.k28_cmb(Trad), 1.63e7 * exp(-32400.0 / Trad); rtol=1e-12)
+        @test isapprox(UnitCMB.gamma_HeH_cmb(Trad),
+                       220.0 * Trad^0.9 * exp(-22740.0 / Trad) +
+                       7.8e3 * Trad^1.2 * exp(-240000.0 / Trad); rtol=1e-12)
+        @test isapprox(UnitCMB.HeH_stim_factor(Trad),
+                       1 + 2e-4 * Trad^1.1; rtol=1e-12)
         # comp2: CMB temperature (Fixsen 2009: T_CMB,0 = 2.725 K; grackle
         # cool1d_multi_g.F uses 2.73 — we use the physical value for CAMB consistency)
         @test isapprox(EmissionKernels.comp2_cmb(z), 2.725 * (1 + z); rtol=1e-12)

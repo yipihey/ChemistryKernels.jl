@@ -19,6 +19,8 @@
 export k7, k8, k9, k10, k11, k12, k13, k14, k15, k16, k17, k18, k19, k22
 export k7_grid, k8_grid, k9_grid, k10_grid, k11_grid, k12_grid, k13_grid,
        k14_grid, k15_grid, k16_grid, k17_grid, k18_grid, k19_grid, k22_grid
+export kHeH_ra_spont, kHeH_ra_stim_base, kHeH_H, kHeH_e
+export kHeH_ra_spont_grid, kHeH_ra_stim_base_grid, kHeH_H_grid, kHeH_e_grid
 
 # ── k7: HI + e → HM + photon ─────────────────────────────────────────────────
 # Stancil, Lepp & Dalgarno (1998), based on Wishart (1979).
@@ -213,3 +215,52 @@ end
     end
 end
 @scalarkernel k22
+
+# ── HeH⁺ catalytic route to H₂⁺ ─────────────────────────────────────────────
+#
+#   He + H⁺ → HeH⁺ + γ
+#   HeH⁺ + H → He + H₂⁺
+#
+# Hirata & Padmanabhan (2006, MNRAS 372, 1175) showed that this trace
+# intermediate supplies almost all of the positive-ion H₂ production once the
+# non-LTE H₂⁺ populations are treated correctly.  HeH⁺ is kept in algebraic
+# equilibrium (equilibrium_HeH), so adding the channel costs no advected field.
+#
+# Formation fits are reactions 52/53 of Schleicher et al. (2008, A&A 490, 521).
+# `kHeH_ra_stim_base` excludes the radiation-only multiplier
+# (1 + 2e-4 Trad^1.1), which is applied while assembling the complete rate set.
+
+# Spontaneous radiative association: He + H⁺ → HeH⁺ + γ.
+@inline function kHeH_ra_spont(T::Real)
+    R = typeof(T)
+    return R(8.0e-20) * (T / R(300.0))^R(-0.24) * exp(-T / R(4000.0))
+end
+@scalarkernel kHeH_ra_spont
+
+# Stimulated-association base coefficient; multiply by the CMB factor above.
+@inline function kHeH_ra_stim_base(T::Real)
+    R = typeof(T)
+    return R(3.2e-20) * T^R(1.8) /
+           (one(R) + R(0.1) * T^R(2.04)) * exp(-T / R(4000.0))
+end
+@scalarkernel kHeH_ra_stim_base
+
+# Proton transfer: HeH⁺ + H → He + H₂⁺.  This 2011 ab-initio fit replaces the
+# older constant/Langevin extrapolations and is valid for T ≤ 1000 K.  Above
+# 1000 K we freeze the coefficient at the validity boundary rather than extend
+# the low-energy power law indefinitely; the HeH⁺ path is negligible in hot gas.
+# Bovino et al. (2011, A&A 529, A140), equation (7).
+@inline function kHeH_H(T::Real)
+    R = typeof(T)
+    Tk = min(T, R(1000.0))
+    return R(4.3489e-10) * Tk^R(0.110373) * exp(-R(31.5396) / Tk)
+end
+@scalarkernel kHeH_H
+
+# Dissociative recombination: HeH⁺ + e → He + H.
+# Stancil, Lepp & Dalgarno (1998), as collected by Schleicher et al. (2008).
+@inline function kHeH_e(T::Real)
+    R = typeof(T)
+    return R(3.0e-8) * (T / R(300.0))^R(-0.47)
+end
+@scalarkernel kHeH_e

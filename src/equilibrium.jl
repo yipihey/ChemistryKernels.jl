@@ -1,5 +1,5 @@
 # equilibrium.jl — algebraic equilibrium intermediaries of the v2026 reduced
-# network: H⁻ (HM), H2⁺ (H2II) and D⁺ (DII).  In the reduced model these three
+# network: H⁻ (HM), H2⁺ (H2II), HeH⁺ and D⁺ (DII).  In the reduced model these
 # species are NOT advected; each is held at the steady state of its own fast
 # formation/destruction balance (the algebraic-equilibrium intermediaries with
 # equilibrium deuterium), so the host carries only HII, H2I and HDI.
@@ -18,7 +18,8 @@
 # Lyman–Werner / UV terms k29,k30 (H2 dissociation) and k24 (D photo-ion.) are
 # zero in the no-radiation primordial network and default to 0.
 
-export equilibrium_HM, equilibrium_H2II, equilibrium_DII, helium_equilibrium
+export equilibrium_HM, equilibrium_H2II, equilibrium_HeH, equilibrium_DII,
+       helium_equilibrium
 
 @inline _equilibrium_ratio(num, den) = den > zero(den) ? num / den : zero(num)
 
@@ -36,6 +37,26 @@ Pure.
     acoef = (k8 + k15) * yHI + (k16 + k17) * yHII +
             k14 * yde + k19 * yH2II / R(2) + k27
     return _equilibrium_ratio(scoef, acoef)
+end
+
+"""
+    equilibrium_HeH(nHeI, nHII, ne, nHI, k_ra, k_H, k_e, gamma_photo)
+
+Algebraic HeH⁺ abundance for the Hirata–Padmanabhan catalytic route
+`He + H⁺ → HeH⁺ + γ`, followed by `HeH⁺ + H → He + H₂⁺`:
+
+`nHeH = k_ra·nHeI·nHII / (k_H·nHI + k_e·ne + gamma_photo)`.
+
+`k_ra` includes spontaneous and CMB-stimulated association.  `k_H` uses the
+updated low-temperature quantum rate of Bovino et al. (2011); `gamma_photo`
+contains both CMB photodissociation branches.  HeH⁺ is trace and fast, so this
+closure adds no persistent species storage. Pure.
+"""
+@inline function equilibrium_HeH(nHeI, nHII, ne, nHI,
+                                 k_ra, k_H, k_e, gamma_photo)
+    num = k_ra * nHeI * nHII
+    den = k_H * nHI + k_e * ne + gamma_photo
+    return _equilibrium_ratio(num, den)
 end
 
 """

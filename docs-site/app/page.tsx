@@ -315,7 +315,7 @@ export default function Home() {
         <div className="species-grid">
           <article><span className="tag blue">ADVECTED</span><h3>H II · H₂ · HD</h3><p>The base state evolves ionized hydrogen and molecular hydrogen; HD is opt-in. A dedicated early-Universe path can also advect He II through its freeze-out.</p></article>
           <article><span className="tag green">RECONSTRUCTED</span><h3>H I · e⁻</h3><p>Neutral hydrogen follows from H-nucleus conservation. Free electrons follow from charge conservation, including the helium stages active in the selected path.</p></article>
-          <article><span className="tag ochre">EQUILIBRIUM</span><h3>H⁻ · H₂⁺ · D⁺</h3><p>Short-lived intermediates use algebraic quasi-equilibrium. Helium defaults to collisional-radiative/Saha equilibrium; He II may instead be integrated.</p></article>
+          <article><span className="tag ochre">EQUILIBRIUM</span><h3>H⁻ · H₂⁺ · HeH⁺ · D⁺</h3><p>Short-lived intermediates use algebraic quasi-equilibrium. HeH⁺ adds the Hirata–Padmanabhan positive-ion route without another stored field. Helium defaults to collisional-radiative/Saha equilibrium; He II may instead be integrated.</p></article>
         </div>
         <div className="network-card">
           <div className="network-copy">
@@ -326,7 +326,7 @@ export default function Home() {
           </div>
           <div className="network-diagram" aria-label="Reduced reaction network">
             <div className="node hi">H I</div><div className="arrow a1">⇄</div><div className="node hii">H II</div>
-            <div className="branch b1">e⁻<br />↓ H⁻</div><div className="branch b2">H₂⁺<br />↓</div><div className="node h2">H₂</div>
+            <div className="branch b1">e⁻<br />↓ H⁻</div><div className="branch b2">H₂⁺ · HeH⁺<br />↓</div><div className="node h2">H₂</div>
             <div className="arrow a2">⇄ D exchange</div><div className="node hd">HD</div>
             <small>fast intermediates are solved algebraically</small>
           </div>
@@ -334,7 +334,7 @@ export default function Home() {
         <div className="capability-table-wrap">
           <table className="capability-table"><thead><tr><th>Physics</th><th>Included treatment</th><th>Where it matters</th></tr></thead><tbody>
             <tr><td>Primordial atomic</td><td>H/He collisional ionization, recombination, excitation, bremsstrahlung</td><td>Ionized and atomic-cooling gas</td></tr>
-            <tr><td>Molecules</td><td>H⁻ and H₂⁺ formation routes, three-body H₂, H₂ and HD cooling</td><td>Dark-age gas and first halos</td></tr>
+            <tr><td>Molecules</td><td>H⁻, H₂⁺, and HeH⁺ formation routes; three-body H₂; H₂ and HD cooling</td><td>Dark-age gas and first halos</td></tr>
             <tr><td>Radiation</td><td>CMB photoprocesses and Compton exchange; optional FG20 UV/X-ray background</td><td>z ≈ 0–8000</td></tr>
             <tr><td>Dust</td><td>Grain H₂, grain recombination, LW shielding, photoelectric heating, gas–grain exchange</td><td>Enriched, shielded gas</td></tr>
             <tr><td>Metals</td><td>C I/II, O I, Si I/II, Fe II fine-structure with independent Fe</td><td>T ≲ 10⁴ K; non-solar [α/Fe]</td></tr>
@@ -494,6 +494,8 @@ export default function Home() {
           <a href="https://doi.org/10.1016/S1384-1076(97)00010-9"><span>1997 · New Astronomy 2, 181</span><h3>Modeling primordial gas in numerical cosmology</h3><p>Abel, Anninos, Zhang & Norman · reaction network and rate fits</p></a>
           <a href="https://arxiv.org/abs/astro-ph/9608041"><span>1997 · New Astronomy 2, 209</span><h3>Cosmological hydrodynamics with multi-species chemistry</h3><p>Anninos, Zhang, Abel & Norman · backward differencing and equilibrium closures</p></a>
           <a href="https://arxiv.org/abs/astro-ph/9803315"><span>1998 · A&amp;A 335, 403</span><h3>The chemistry of the early Universe</h3><p>Galli & Palla · molecular network and cooling</p></a>
+          <a href="https://doi.org/10.1111/j.1365-2966.2006.10924.x"><span>2006 · MNRAS 372, 1175</span><h3>Cosmological production of H₂</h3><p>Hirata & Padmanabhan · motivation and one-level closure for the HeH⁺ catalytic route</p></a>
+          <a href="https://doi.org/10.1051/0004-6361/201116740"><span>2011 · A&amp;A 529, A140</span><h3>Ion chemistry in the early Universe</h3><p>Bovino et al. · ab-initio HeH⁺ + H proton-transfer rate</p></a>
           <a href="https://arxiv.org/abs/astro-ph/0112088"><span>2002 · Science 295, 93</span><h3>The formation of the first star in the Universe</h3><p>Abel, Bryan & Norman · resolved primordial collapse and H₂-cooled core formation</p></a>
           <a href="https://arxiv.org/abs/1005.2416"><span>2010 · Phys. Rev. D 82, 083520</span><h3>Relative velocity of dark matter and baryonic fluids</h3><p>Tseliakhovich & Hirata · coherent supersonic streaming and first-structure formation</p></a>
           <a href="https://arxiv.org/abs/1204.1344"><span>2012 · ApJ 760, 4</span><h3>The first cosmic structures and the z≈20 Universe</h3><p>O’Leary & McQuinn · streaming-aware simulations across 15 ≲ z ≲ 200</p></a>
@@ -512,6 +514,8 @@ export default function Home() {
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/log2_species.jl"><b>UInt16 codec</b><span>src/log2_species.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_atomic.jl"><b>Atomic rates</b><span>src/rates_atomic.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_h2.jl"><b>Molecular rates</b><span>src/rates_h2.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/equilibrium.jl"><b>Fast intermediates</b><span>src/equilibrium.jl ↗</span></a>
+          <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rates_cmb.jl"><b>CMB photoprocesses</b><span>src/rates_cmb.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/src/rate_tables.jl"><b>GPU rate tables</b><span>src/rate_tables.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/test/test_fast.jl"><b>Analytic validation</b><span>test/test_fast.jl ↗</span></a>
           <a href="https://github.com/yipihey/ChemistryKernels.jl/blob/main/test/test_recombination_mixing.jl"><b>HyRec / RECFAST gates</b><span>test/test_recombination_mixing.jl ↗</span></a>

@@ -1,4 +1,4 @@
-# rates_cmb.jl — CMB photo-destruction rates for H- (k27) and H2+ (k28).
+# rates_cmb.jl — CMB photo-destruction rates for H-, H2+, and HeH+.
 #
 # These rates are not tabulated functions of gas temperature; they are
 # evaluated per-call as literal analytic formulas of the CMB radiation
@@ -32,3 +32,22 @@ end
     return R(1.63e7) * exp(-R(32400.0) / Trad)
 end
 @scalarkernel k28_cmb
+
+# ── HeH⁺ + γ_CMB → He + H⁺ / He⁺ + H ───────────────────────────────────────
+# Sum of reactions 58 and 59 in Schleicher et al. (2008, A&A 490, 521).
+# The first channel is the inverse of radiative association and dominates in
+# the dark-age regime.  Raw CGS rate, s⁻¹.
+@inline function gamma_HeH_cmb(Trad::Real)
+    R = typeof(Trad)
+    return R(220.0) * Trad^R(0.9) * exp(-R(22740.0) / Trad) +
+           R(7.8e3) * Trad^R(1.2) * exp(-R(240000.0) / Trad)
+end
+@scalarkernel gamma_HeH_cmb
+
+# CMB stimulated-radiative-association enhancement used with
+# `kHeH_ra_stim_base(T)`.
+@inline function HeH_stim_factor(Trad::Real)
+    R = typeof(Trad)
+    return one(R) + R(2.0e-4) * Trad^R(1.1)
+end
+@scalarkernel HeH_stim_factor

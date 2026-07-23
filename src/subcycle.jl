@@ -59,12 +59,14 @@ neutral-H density `nHI` and Hubble rate `Hz`); k27/k28 are the CMB photo-rates;
 all others are the Wave-1 analytic fits. Pure.
 """
 # The reaction-rate coefficients that depend ONLY on the CMB radiation temperature
-# Trad (β₁s, k27, k28, the two He Saha factors).  Trad is frozen across a sub-cycle
+# Trad (β₁s, k27, k28, HeH⁺ radiation terms, the two He Saha factors). Trad is
+# frozen across a sub-cycle
 # unless the host supplies its expansion rate (evolve_z), so `evolve_cell` builds this
 # ONCE per cell and reuses it every iteration — hoisting ~5 transcendentals/iter out
 # of the per-iteration `build_rates`.  isbits NamedTuple ⇒ free in a GPU kernel.
 @inline function cmb_rates(Trad)
     return (; b1s = beta1s_freq(Trad), k27 = k27_cmb(Trad), k28 = k28_cmb(Trad),
+            gamma_HeH = gamma_HeH_cmb(Trad), HeH_stim = HeH_stim_factor(Trad),
             she = helium_saha_pair(Trad))
 end
 
@@ -89,11 +91,14 @@ end
     # at the matter T.
     k_b1s = cr.b1s * k2_val / (recfast_alpha(T) * R(1.0e6))
     she1, she2 = cr.she     # He Saha factors at Trad (→ fully neutral He at low z)
+    kHeH_ra = kHeH_ra_spont(T) + kHeH_ra_stim_base(T) * cr.HeH_stim
     base = (; k1=k1(T), k2=k2_val, k3=k3(T), k4=k4(T), k5=k5(T),
             k6=k6(T), k7=k7(T), k8=k8(T), k9=k9(T), k10=k10(T), k11=k11(T),
             k12=k12(T), k13=k13(T), k14=k14(T), k15=k15(T), k16=k16(T), k17=k17(T),
             k18=k18(T), k19=k19(T), k22=k22(T), k57=k57(T), k58=k58(T),
             k27=cr.k27, k28=cr.k28, k_beta1s=k_b1s,
+            kHeH_ra=kHeH_ra, kHeH_H=kHeH_H(T), kHeH_e=kHeH_e(T),
+            gamma_HeH=cr.gamma_HeH,
             she1=she1, she2=she2)
     deuterium || return base
     return merge(base, (; k50=k50(T), k51=k51(T), k52=k52(T), k53=k53(T),
@@ -124,12 +129,15 @@ end
 # Net H2 rate evaluated from the same algebraic H-/H2+ intermediaries and source /
 # destruction coefficients used by `network_step`. `yH2I` counts H nuclei in H2,
 # so this rate has the same mass-equivalent convention as the evolved state.
-@inline function _h2_dot(yHI, yHII, yde, yH2I, yHM, yH2II, K;
+@inline function _h2_dot(yHI, yHII, yde, yH2I, yHM, yH2II, nHeI, K;
                          k_h2d = zero(typeof(yHI)), k_lw = zero(typeof(yHI)))
     R = typeof(yHI)
     HMp, H2IIeq = _molecular_intermediates(yHI, yHII, yde, yH2I, K)
+    nHeH = equilibrium_HeH(nHeI, yHII, yde, yHI, K.kHeH_ra, K.kHeH_H,
+                           K.kHeH_e, K.gamma_HeH)
     source = R(2) * (K.k8*HMp*yHI + K.k10*H2IIeq*yHI/R(2) +
-                     K.k19*H2IIeq*HMp/R(2) + K.k22*yHI^3) +
+                     K.k19*H2IIeq*HMp/R(2) + K.kHeH_H*nHeH*yHI +
+                     K.k22*yHI^3) +
              R(2) * R(k_h2d) * yHI^2
     destruction = K.k13*yHI + K.k11*yHII + K.k12*yde + R(k_lw)
     return source - destruction*yH2I
@@ -314,7 +322,8 @@ Dust physics is enabled by `dust = true`, which requires:
                               yHeI, tiny, tiny, K)
         dt_electron = _step_f(yde, dedot, f)
         dt_h2 = if SL === :h2 || D
-            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate, K;
+            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
+                            yHeI/R(4), K;
                             k_h2d=dust_rates.k_h2d, k_lw=dust_rates.k_lw)
             h2_reference = max(yH2I, R(h2_fraction_floor) * R(fh) * d)
             _step_f(h2_reference, h2dot, f)
@@ -345,6 +354,9 @@ Dust physics is enabled by `dust = true`, which requires:
         h2_source = R(2)*(K.k8*yHM_rate*yHI +
                           K.k10*yH2II_rate*yHI/R(2) +
                           K.k19*yH2II_rate*yHM_rate/R(2) +
+                          K.kHeH_H*equilibrium_HeH(yHeI/R(4), yHII, yde, yHI,
+                                                  K.kHeH_ra, K.kHeH_H,
+                                                  K.kHeH_e, K.gamma_HeH)*yHI +
                           K.k22*yHI*yHI^2) +
                     R(2)*dust_rates.k_h2d*yHI^2
         h2_loss = K.k13*yHI + K.k11*yHII + K.k12*yde +

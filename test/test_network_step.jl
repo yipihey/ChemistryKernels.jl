@@ -77,4 +77,16 @@ using ChemistryKernels: network_step, equilibrium_HM, equilibrium_H2II, equilibr
                        yHeII_in=0.0f0, yHeIII_in=0.0f0)
     @test isapprox(Float64(o32.yHI),  out.yHI;  rtol=1e-4)
     @test isapprox(Float64(o32.yHII), out.yHII; rtol=1e-4)
+
+    # HeH⁺ is a default zero-storage H₂ source. Enable only its pinned rates and
+    # verify that neutral helium and H⁺ are both required.
+    Kheh = merge(K, (; kHeH_ra=8e-20, kHeH_H=7e-10, kHeH_e=3e-8,
+                       gamma_HeH=2e-11))
+    with_heh = network_step(d, fh, yHI,yHII,yde,yH2I,yHM,yH2II,
+                            yDI,yDII,yHDI, Kheh, 1e6;
+                            deuterium=false, yHeII_in=0.0, yHeIII_in=0.0)
+    without_he = network_step(d, 1.0, yHI,yHII,yde,yH2I,yHM,yH2II,
+                              yDI,yDII,yHDI, Kheh, 1e6;
+                              deuterium=false, yHeII_in=0.0, yHeIII_in=0.0)
+    @test with_heh.yH2I > without_he.yH2I
 end
