@@ -20,6 +20,22 @@
 
 export network_step
 
+@inline function _molecular_intermediates(yHI, yHII, yde, yH2I, K)
+    R = typeof(yHI)
+    # H- and H2+ are algebraic, so their solution must not depend on a retained
+    # value from the previous subcycle or caller. Two fixed Gauss-Seidel passes
+    # resolve their weak mutual k19 coupling while remaining allocation-free.
+    HM0 = equilibrium_HM(yHI, yHII, yde, zero(R), K.k7, K.k8, K.k14, K.k15,
+                         K.k16, K.k17, K.k19, K.k27)
+    H2II0 = equilibrium_H2II(yHI, yHII, yH2I, yde, HM0, K.k9, K.k10, K.k11,
+                             K.k17, K.k18, K.k19, K.k28)
+    HM = equilibrium_HM(yHI, yHII, yde, H2II0, K.k7, K.k8, K.k14, K.k15,
+                        K.k16, K.k17, K.k19, K.k27)
+    H2II = equilibrium_H2II(yHI, yHII, yH2I, yde, HM, K.k9, K.k10, K.k11,
+                            K.k17, K.k18, K.k19, K.k28)
+    return HM, H2II
+end
+
 """
     network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II, yDI, yDII, yHDI, K, dt;
                  deuterium = false, dust_rates = nothing)
@@ -38,7 +54,8 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
                               yDI, yDII, yHDI, K, dt; deuterium::Bool = false,
                               yHeII_in = nothing, yHeIII_in = nothing,
                               GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0,
-                              dust_rates = nothing)
+                              dust_rates = nothing,
+                              intermediates_current::Val{IC} = Val(false)) where {IC}
     R    = typeof(yHI)
     z    = zero(R)
     two  = R(2); half = R(0.5); three = R(3); four = R(4)
@@ -96,9 +113,16 @@ CMB photo-rates `k27`,`k28` (all in the network's per-density-unit convention),
     # dissociative k18·de branch) recovers the full network to <0.25% of HyRec
     # across z=700-1100.  H₂⁺ being trace at low z, the change is negligible in the
     # original galaxy-formation regime.
-    HMp    = equilibrium_HM(yHI, yHII, yde, yH2II, k7, k8, k14, k15, k16, k17, k19, k27)
-    H2IIeq = equilibrium_H2II(yHI, yHII, yH2I, yde, HMp,
-                              k9, k10, k11, k17, k18, k19, k28)
+    if IC
+        HMp, H2IIeq = yHM, yH2II
+    else
+        # Preserve the pinned standalone one-sweep transcription. Higher-level
+        # subcyclers pass their state-independent algebraic solution with IC=true.
+        HMp = equilibrium_HM(yHI, yHII, yde, yH2II, k7, k8, k14, k15,
+                             k16, k17, k19, k27)
+        H2IIeq = equilibrium_H2II(yHI, yHII, yH2I, yde, HMp, k9, k10, k11,
+                                  k17, k18, k19, k28)
+    end
     nH2II  = H2IIeq / two          # n(H₂⁺); H2IIeq carries the 2× mass-equiv convention
 
     # 1,2) Coupled HI/HII update. At recombination redshifts the β₁s exchange is

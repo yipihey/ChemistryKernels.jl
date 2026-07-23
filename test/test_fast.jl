@@ -55,6 +55,40 @@ let CK = ChemistryKernels,
             @test 60 < gT(nH,sF.nHII,sF.nH2,sF.e) < 200         # cooled to the H2 floor
         end
 
+        @testset "algebraic H-/H2+ state is invariant to solver re-entry" begin
+            function collapse_reentry(external_split)
+                zc=25.0; N=250
+                ns=exp.(range(log(nHbar(zc)),log(1e4),length=N))
+                e0=KB*max(CK.comp2_cmb(zc)*0.5,60.0)/((GAMMA-1)*1.22*MH)
+                s=(nHII=2e-4*ns[1],nH2=2e-6*ns[1],e=e0)
+                for i in 2:N
+                    nH=ns[i]; sc=nH/ns[i-1]
+                    dt=0.3/sqrt(6.67e-8*nH*MH/FH); ad=sc^(GAMMA-1)
+                    s=(nHII=s.nHII*sc,nH2=s.nH2*sc,e=s.e*ad)
+                    if external_split
+                        for _ in 1:2
+                            r=CK.evolve_cell(nH*MH/FH,s.e,s.nHII*MH,2s.nH2*MH,
+                                             0.0,dt/2,zc;fh=FH,deuterium=false,
+                                             species_limiter=Val(:none))
+                            s=(nHII=r[2]/MH,nH2=r[3]/(2MH),e=r[1])
+                        end
+                    else
+                        r=CK.evolve_cell(nH*MH/FH,s.e,s.nHII*MH,2s.nH2*MH,
+                                         0.0,dt,zc;fh=FH,deuterium=false,
+                                         species_limiter=Val(:none),
+                                         max_substep_fraction=0.25)
+                        s=(nHII=r[2]/MH,nH2=r[3]/(2MH),e=r[1])
+                    end
+                end
+                return s
+            end
+            internal=collapse_reentry(false)
+            external=collapse_reentry(true)
+            @test isapprox(external.nHII,internal.nHII;rtol=5e-4)
+            @test isapprox(external.nH2,internal.nH2;rtol=5e-4)
+            @test isapprox(external.e,internal.e;rtol=5e-4)
+        end
+
         @testset "recombination-only cell recombines away (no spurious collisional floor)" begin
             nH=1e4; T=100.0; e=KB*T/((GAMMA-1)*1.22*MH); zc=25.0
             r=CK.evolve_cell_fast(nH*MH/FH, e, 4e-5*nH*MH, 2e-12*nH*MH, 1e16, zc; fh=FH)

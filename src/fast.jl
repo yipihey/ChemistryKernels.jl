@@ -213,7 +213,7 @@ convention, `H2I_m` = 2·n(H₂)·m_H).  Pure; ~2× cheaper per substep than `ev
         yHI  = max(fhd - yHII - yH2I, tiny)
         yde  = yHII
 
-        ttot += dtit
+        ttot = _advance_subcycle_time(ttot, dtit, dt)
     end
     return e, yHII*mh, yH2I*mh, ttot
 end
@@ -480,7 +480,7 @@ iteration count, not the rate fits), so the fits remain the default.
             _A, _B = helium_HeI_rate_AB(Tc, nH_h, Hz, _xh1, xHeII, fHe)
             xHeII  = (xHeII + _A*dtc) / (one(R) + _B*dtc)
         end
-        ttot += dtc
+        ttot = _advance_subcycle_time(ttot, dtc, dt)
     end
     return e, yHII*mh, yH2I*mh, ttot, xHeII
 end

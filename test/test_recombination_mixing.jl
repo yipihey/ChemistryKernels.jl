@@ -209,6 +209,84 @@ end
     end
 end
 
+@testset "fully ionized mixing handoff advances" begin
+    fh = 0.76f0
+    z = 1600.0f0
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho = nH * Float32(ChemistryKernels.MH) / fh
+    e = Float32(e_from_T(2.725 * (1 + Float64(z)), 1.0, Float64(rho)))
+    HII = fh * rho
+    dt = 1.0f10
+
+    result = evolve_cell_mixing(rho, e, HII, 0.0f0, 0.0f0, nH, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(false),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=16)
+    reference = evolve_cell_mixing(rho, e, HII, 0.0f0, 0.0f0, nH, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(false),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=1024)
+
+    @test result[2] < HII
+    @test result[1] != e
+    @test all(isfinite, result)
+    @test result == reference
+end
+
+@testset "Float32 radiative equilibrium does not exhaust the iteration cap" begin
+    fh = 0.76f0
+    z = 2450.0f0
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho = nH * Float32(ChemistryKernels.MH) / fh
+    neutral_fraction = 1.0f-7
+    HII = (fh - neutral_fraction) * rho
+    e = Float32(e_from_T(2.725 * (1 + Float64(z)), 1.0, Float64(rho)))
+    dt = 1.94f8
+
+    diag = evolve_cell_mixing(
+        rho, e, HII, 0.0f0, 0.0f0, neutral_fraction*nH, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(true),
+        fudge=1.125f0, gauss=Float32(recfast_gauss_factor(z)),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=16,
+        diagnostics=Val(true))
+    reference = evolve_cell_mixing(
+        rho, e, HII, 0.0f0, 0.0f0, neutral_fraction*nH, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(true),
+        fudge=1.125f0, gauss=Float32(recfast_gauss_factor(z)),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=1024)
+
+    @test diag.completed
+    @test diag.iterations <= 4
+    @test diag.neutral_restrictive_steps > 0
+    @test (diag.e, diag.HII_m, diag.H2I_m, diag.HDI_m, diag.HeII_m) == reference
+end
+
+@testset "Float32 fully ionized high-z equilibrium does not exhaust the cap" begin
+    fh = 0.76f0
+    z = 1.0f6
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho = nH * Float32(ChemistryKernels.MH) / fh
+    HII = fh * rho
+    e = Float32(e_from_T(2.725 * (1 + Float64(z)), 1.0, Float64(rho)))
+    dt = 1.2f4
+
+    diag = evolve_cell_mixing(
+        rho, e, HII, 0.0f0, 0.0f0, 0.0f0, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(true),
+        fudge=1.125f0, gauss=Float32(recfast_gauss_factor(z)),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=16,
+        diagnostics=Val(true))
+    reference = evolve_cell_mixing(
+        rho, e, HII, 0.0f0, 0.0f0, 0.0f0, dt, z;
+        f_alpha=1.0f0, Xe_mean=1.0f0, smoothed_is_neutral=Val(true),
+        fudge=1.125f0, gauss=Float32(recfast_gauss_factor(z)),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=1024)
+
+    @test diag.completed
+    @test diag.iterations <= 8
+    @test diag.electron_limited_steps == 0
+    @test all(isfinite, (diag.e, diag.HII_m, diag.H2I_m))
+    @test (diag.e, diag.HII_m, diag.H2I_m, diag.HDI_m, diag.HeII_m) == reference
+end
+
 @testset "Float32 high-z Riccati equilibrium" begin
     # At high redshift beta*nHI and beta*xHII nearly cancel.  The positive
     # quadratic root must not lose that equilibrium to Float32 cancellation.

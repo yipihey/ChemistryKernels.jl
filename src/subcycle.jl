@@ -3,7 +3,8 @@
 # sub-step `dtit` that:
 #   1. evaluates T, all rates (with the Peebles k2 override), edot, and the
 #      net e⁻/HI rates;
-#   2. sizes dtit to a ≤10% change in n_e, n_HI and the thermal energy;
+#   2. sizes dtit to a ≤10% change in n_e and the thermal energy (alternate
+#      H2/no-species limiters are available for scalar convergence diagnosis);
 #   3. advances the energy — IMPLICITLY for the stiff CMB-Compton term when it is
 #      stiff (K·Δt>1), else explicitly;
 #   4. advances the species by one backward-Euler sweep (`network_step`).
@@ -34,6 +35,20 @@ const _SUB_TINY  = 1.0e-20
 # guard the division instead, never the value.
 @inline _step_f(X, rate, f) = abs(rate) > zero(rate) ? abs(f * X / rate) : typemax(rate)
 @inline _step10(X, rate) = _step_f(X, rate, oftype(rate, 0.1))   # backward-compat alias
+
+# A vanishing species must not freeze the subcycler while it is being produced.
+# Formation is bounded through the complementary HII/electron equation; this limit is
+# only needed when the explicit rate would deplete the current neutral reservoir.
+@inline _depletion_step_f(X, rate, f) =
+    rate < zero(rate) ? _step_f(X, rate, f) : typemax(rate)
+
+# `dt` is commonly a large physical time in Float32. Adding its final remainder to
+# `ttot` can round back below `dt`, leaving the loop to spin until `itcap`. Preserve
+# the exact completion state when the selected substep consumes that remainder.
+@inline function _advance_subcycle_time(ttot, dtit, dt)
+    rem = dt - ttot
+    return dtit >= rem ? dt : ttot + dtit
+end
 
 """
     build_rates(T, Trad, nHI, Hz; deuterium=false)
@@ -106,6 +121,20 @@ end
     return dedot, HIdot
 end
 
+# Net H2 rate evaluated from the same algebraic H-/H2+ intermediaries and source /
+# destruction coefficients used by `network_step`. `yH2I` counts H nuclei in H2,
+# so this rate has the same mass-equivalent convention as the evolved state.
+@inline function _h2_dot(yHI, yHII, yde, yH2I, yHM, yH2II, K;
+                         k_h2d = zero(typeof(yHI)), k_lw = zero(typeof(yHI)))
+    R = typeof(yHI)
+    HMp, H2IIeq = _molecular_intermediates(yHI, yHII, yde, yH2I, K)
+    source = R(2) * (K.k8*HMp*yHI + K.k10*H2IIeq*yHI/R(2) +
+                     K.k19*H2IIeq*HMp/R(2) + K.k22*yHI^3) +
+             R(2) * R(k_h2d) * yHI^2
+    destruction = K.k13*yHI + K.k11*yHII + K.k12*yde + R(k_lw)
+    return source - destruction*yH2I
+end
+
 """
     evolve_cell(rho, e, HII_m, H2I_m, HDI_m, dt, z; hubble, Om, OL, fh, deuterium,
                 dust, Z_rel, G0, A_V, N_H, N_H2)
@@ -129,9 +158,14 @@ Dust physics is enabled by `dust = true`, which requires:
                              rate_tables = nothing, cool_tables = nothing,
                              itcap::Int = _SUB_ITMAX,
                              dtfrac::Real = 0.1,
+                             max_substep_fraction::Real = 0.5,
+                             species_limiter::Val{SL} = Val(:electron),
+                             h2_fraction_floor::Real = 1.0e-12,
+                             diagnostics::Val{D} = Val(false),
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
-                             A_V::Real = 0.0, N_H::Real = 0.0, N_H2::Real = 0.0)
+                             A_V::Real = 0.0, N_H::Real = 0.0,
+                             N_H2::Real = 0.0) where {SL,D}
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     # domain guard (match evolve_cell_analytic/fast): f16/f32 hydro + dual-energy
@@ -199,6 +233,13 @@ Dust physics is enabled by `dust = true`, which requires:
     f    = R(dtfrac)                       # fraction-change tolerance (default 0.1 = 10%)
     ttot = zero(R)
     iter = 0
+    electron_shorter_steps = 0
+    h2_shorter_steps = 0
+    electron_selected_steps = 0
+    h2_selected_steps = 0
+    minimum_electron_dt_fraction = one(R)
+    minimum_h2_dt_fraction = one(R)
+    minimum_h2_over_electron = typemax(R)
     while ttot < dt && iter < itcap        # itcap bounds THIS call (resumable: caller re-enters
         iter += 1                          # with the partial state + remaining dt for the stragglers)
         rem = dt - ttot
@@ -221,6 +262,11 @@ Dust physics is enabled by `dust = true`, which requires:
         # rate coefficients: analytic fits (default/reference) or the opt-in log–log table.
         K  = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
                                        table_rates(rate_tables, T, yHI, Hz, cr; deuterium = deuterium)
+        # H- and H2+ are algebraic intermediaries, not persistent state. Refresh them
+        # from the same state/rates used by cooling, chemistry heating, and timestep
+        # estimates so re-entering `evolve_cell` is equivalent to internal refinement.
+        yHM_rate, yH2II_rate =
+            _molecular_intermediates(yHI, yHII, yde, yH2I, K)
 
         # Dust physics: per-sub-step rate coefficients (the T- and nₑ-dependent ones).
         # T_dust and k_lw are hoisted above; T_d is only refreshed here when evolve_z
@@ -251,7 +297,8 @@ Dust physics is enabled by `dust = true`, which requires:
                             Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol)
         # H₂ formation heating + dissociation cooling (uses the explicitly-evolved
         # H⁻/H₂⁺; yH2II carries the 2× convention → n(H₂⁺)=yH2II/2, n(H⁻)=yHM).
-        edot += _h2_chem_heat(yHI, yHII, yde, yH2I/R(2), yHM, yH2II/R(2), R(fh)*d,
+        edot += _h2_chem_heat(yHI, yHII, yde, yH2I/R(2),
+                              yHM_rate, yH2II_rate/R(2), R(fh)*d,
                               K.k8, K.k10, K.k11, K.k12, K.k13, K.k22)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
             edot = zero(R)
@@ -262,10 +309,31 @@ Dust physics is enabled by `dust = true`, which requires:
             edot -= R(2) * Hz_ad * e * rho
         end
 
-        # chemistry sub-step (no constraint when a rate is ~0)
-        dedot, HIdot = _de_hi_dot(yHI, yHII, yde, yH2I, yHM, yH2II,
-                                  yHeI, tiny, tiny, K)
-        dtit = min(_step_f(yde, dedot, f), _step_f(yHI, HIdot, f), rem, R(0.5)*dt)
+        dedot, _ = _de_hi_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
+                              yHeI, tiny, tiny, K)
+        dt_electron = _step_f(yde, dedot, f)
+        dt_h2 = if SL === :h2 || D
+            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate, K;
+                            k_h2d=dust_rates.k_h2d, k_lw=dust_rates.k_lw)
+            h2_reference = max(yH2I, R(h2_fraction_floor) * R(fh) * d)
+            _step_f(h2_reference, h2dot, f)
+        else
+            typemax(R)
+        end
+        # `network_step` solves the stiff atomic HI/HII pair conservatively with a
+        # positivity-preserving backward-Euler update. Do not apply an additional
+        # explicit fractional limiter to HI. The alternate compile-time selectors are
+        # for convergence diagnosis; `:electron` remains the validated default.
+        dt_species = if SL === :electron
+            dt_electron
+        elseif SL === :h2
+            dt_h2
+        elseif SL === :none
+            typemax(R)
+        else
+            error("unknown chemistry species limiter")
+        end
+        dtit = min(dt_species, rem, R(max_substep_fraction)*dt)
 
         # energy sub-step + CMB-Compton stiffness split
         edot_c    = -c1 * (T - Tc) * yde            # Compton part (volumetric)
@@ -273,7 +341,21 @@ Dust physics is enabled by `dust = true`, which requires:
         Kc        = c1 * yde * (T / e) / rho        # specific Compton frequency
         stiff     = Kc * rem > one(R)
         de_spec   = (stiff ? edot_rest : edot) / rho
-        dtit = min(dtit, _step_f(e, de_spec, f))
+        dt_energy = _step_f(e, de_spec, f)
+        dtit = min(dtit, dt_energy)
+
+        if D
+            electron_shorter_steps += dt_electron < dt_h2
+            h2_shorter_steps += dt_h2 < dt_electron
+            electron_selected_steps += dtit == dt_electron
+            h2_selected_steps += dtit == dt_h2
+            minimum_electron_dt_fraction =
+                min(minimum_electron_dt_fraction, dt_electron / max(rem, eps(R)))
+            minimum_h2_dt_fraction =
+                min(minimum_h2_dt_fraction, dt_h2 / max(rem, eps(R)))
+            minimum_h2_over_electron =
+                min(minimum_h2_over_electron, dt_h2 / max(dt_electron, eps(R)))
+        end
 
         # energy update
         if stiff
@@ -285,14 +367,23 @@ Dust physics is enabled by `dust = true`, which requires:
         e = max(e, tiny)
 
         # species update (one backward-Euler sweep)
-        s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
+        s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                          yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
-                         dust_rates = dust_rates)
+                         dust_rates = dust_rates, intermediates_current=Val(true))
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
 
-        ttot += dtit
+        ttot = _advance_subcycle_time(ttot, dtit, dt)
     end
 
+    if D
+        return (; e, HII_m=yHII*mh, H2I_m=yH2I*mh,
+                HDI_m=(deuterium ? yHDI*mh : HDI_m),
+                consumed=ttot, iterations=iter, completed=ttot >= dt,
+                electron_shorter_steps, h2_shorter_steps,
+                electron_selected_steps, h2_selected_steps,
+                minimum_electron_dt_fraction, minimum_h2_dt_fraction,
+                minimum_h2_over_electron)
+    end
     return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m), ttot   # ttot = consumed (≤ dt)
 end

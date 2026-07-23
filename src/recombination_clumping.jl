@@ -371,7 +371,7 @@ reduces to `evolve_cell_analytic`.
         yHII = clamp(yHII, zeroR, max(fhd - yH2I, zeroR))
         yHI = max(fhd - yHII - yH2I, zeroR)
         yde = yHII
-        ttot += dtc
+        ttot = _advance_subcycle_time(ttot, dtc, dt)
     end
 
     return e, yHII*mh, yH2I*mh, ttot
@@ -382,7 +382,8 @@ end
 """
     evolve_cell_mixing(rho, e, HII_m, H2I_m, HDI_m, n_sm_cgs, dt, z;
                        f_alpha, Xe_mean, smoothed_is_neutral, hubble, Om, OL,
-                       fh, deuterium) -> (e, HII_m, H2I_m, HDI_m)
+                       fh, deuterium, diagnostics=Val(false))
+        -> (e, HII_m, H2I_m, HDI_m, HeII_m)
 
 Sub-cycle one cell over macro-step `dt` [s] with Lyα-mixing recombination.
 Identical to `evolve_cell` except `build_rates_mixing` is called each substep with
@@ -390,7 +391,9 @@ Identical to `evolve_cell` except `build_rates_mixing` is called each substep wi
 
 `n_sm_cgs` is the smoothed H number density from the host (physical CGS). Interpreted
 as total n_H when `smoothed_is_neutral=Val(false)` (default; approximates n1s via
-global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
+global Xe_mean), or as n1s directly when `Val(true)`. `diagnostics=Val(true)`
+returns a named tuple with the final state, consumed time, iteration count, and
+timestep-limiter counters for scalar convergence analysis. Pure; allocation-free.
 """
 @inline function evolve_cell_mixing(rho, e, HII_m, H2I_m, HDI_m,
                                     n_sm_cgs, dt, z;
@@ -413,7 +416,10 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
                                     metals = nothing,
                                     rate_tables = nothing,
                                     dtfrac::Real = 0.1,
-                                    itcap::Int = _SUB_ITMAX) where {SN}
+                                    itcap::Int = _SUB_ITMAX,
+                                    species_limiter::Val{SL} = Val(:gated_electron),
+                                    h2_fraction_floor::Real = 1.0e-12,
+                                    diagnostics::Val{D} = Val(false)) where {SN,SL,D}
     R    = typeof(e)
     mh   = R(MH); zeroR = zero(R)
     d    = rho / mh
@@ -452,6 +458,24 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
 
     ttot = zero(R)
     iter = 0
+    hi_formation_steps = 0
+    hi_depletion_steps = 0
+    hi_rate_sign_flips = 0
+    previous_hi_sign = 0
+    electron_limited_steps = 0
+    h2_limited_steps = 0
+    electron_shorter_steps = 0
+    h2_shorter_steps = 0
+    neutral_restrictive_steps = 0
+    energy_limited_steps = 0
+    remainder_limited_steps = 0
+    halfstep_limited_steps = 0
+    minimum_dt_fraction = one(R)
+    minimum_electron_dt_fraction = one(R)
+    minimum_h2_dt_fraction = one(R)
+    minimum_h2_over_electron = typemax(R)
+    minimum_neutral_fraction = yHI / max(nH_h, eps(R))
+    maximum_neutral_fraction = minimum_neutral_fraction
     while ttot < dt && iter < itcap
         iter += 1
         rem = dt - ttot
@@ -467,6 +491,8 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
                                fudge = fud, gauss = gss, deuterium = deuterium) :
             table_rates_mixing(rate_tables, T, yHI, nHI_eff, Hz, cr;
                                fudge = fud, gauss = gss)
+        yHM_rate, yH2II_rate =
+            _molecular_intermediates(yHI, yHII, yde, yH2I, K)
 
         # UV-background He photoionisation equilibrium (default He path).  Solve the
         # collisional-radiative + photo He equilibrium ONCE, up front, so this substep's
@@ -504,16 +530,73 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
             edot -= R(2) * Hz * e * rho
         end
 
-        dedot, HIdot = _de_hi_dot(yHI, yHII, yde, yH2I, yHM, yH2II,
+        dedot, HIdot = _de_hi_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                                   yHeI, zeroR, zeroR, K; GamHI = gHI)
-        dtit = min(_step_f(yde, dedot, frac), _step_f(yHI, HIdot, frac), rem, R(0.5)*dt)
+        dt_electron = _step_f(yde, dedot, frac)
+        dt_h2 = if SL === :h2 || D
+            h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate, K)
+            h2_reference = max(yH2I, R(h2_fraction_floor) * nH_h)
+            _step_f(h2_reference, h2dot, frac)
+        else
+            typemax(R)
+        end
+        dt_neutral = _depletion_step_f(yHI, HIdot, frac)
+        dt_halfstep = R(0.5) * dt
 
         edot_c    = -c1 * (T - Tc) * yde
         edot_rest = edot - edot_c
         Kc        = (e > zeroR && rho > zeroR) ? c1 * yde * (T / e) / rho : zeroR
         stiff     = Kc * rem > one(R)
         de_spec   = (stiff ? edot_rest : edot) / rho
-        dtit = min(dtit, _step_f(e, de_spec, frac))
+        dt_energy = _step_f(e, de_spec, frac)
+        # The atomic HI/HII update in `network_step` is already a conservative,
+        # positivity-preserving backward-Euler solve. The explicit HI fractional
+        # limiter is both redundant and pathological in Float32 when the equilibrium
+        # neutral fraction lies below the `fh*rho - HII_m` subtraction quantum.
+        # In nearly fully ionized atomic gas, enormous one-way ionization and
+        # recombination rates cancel only in the coupled backward-Euler update.
+        # Bypass the explicit electron limiter only when it would select a
+        # pathological step in that regime. Retain it once neutral/molecular
+        # chemistry becomes nonlinear.
+        neutral_fraction = yHI / max(nH_h, eps(R))
+        atomic_equilibrium = neutral_fraction <= R(1e-4) &&
+                             dt_electron < R(0.01) * min(rem, dt_halfstep)
+        dt_species = if SL === :gated_electron
+            atomic_equilibrium ? typemax(R) : dt_electron
+        elseif SL === :electron
+            dt_electron
+        elseif SL === :h2
+            dt_h2
+        elseif SL === :none
+            typemax(R)
+        else
+            error("unknown mixing chemistry species limiter")
+        end
+        dtit = min(dt_species, dt_energy, rem, dt_halfstep)
+
+        if D
+            hi_sign = HIdot > zeroR ? 1 : (HIdot < zeroR ? -1 : 0)
+            hi_formation_steps += hi_sign > 0
+            hi_depletion_steps += hi_sign < 0
+            hi_rate_sign_flips += previous_hi_sign != 0 && hi_sign != 0 &&
+                                  hi_sign != previous_hi_sign
+            hi_sign != 0 && (previous_hi_sign = hi_sign)
+            electron_limited_steps += dtit == dt_electron
+            h2_limited_steps += dtit == dt_h2
+            electron_shorter_steps += dt_electron < dt_h2
+            h2_shorter_steps += dt_h2 < dt_electron
+            neutral_restrictive_steps += dt_neutral < dtit
+            energy_limited_steps += dtit == dt_energy
+            remainder_limited_steps += dtit == rem
+            halfstep_limited_steps += dtit == dt_halfstep
+            minimum_dt_fraction = min(minimum_dt_fraction, dtit / max(rem, eps(R)))
+            minimum_electron_dt_fraction =
+                min(minimum_electron_dt_fraction, dt_electron / max(rem, eps(R)))
+            minimum_h2_dt_fraction =
+                min(minimum_h2_dt_fraction, dt_h2 / max(rem, eps(R)))
+            minimum_h2_over_electron =
+                min(minimum_h2_over_electron, dt_h2 / max(dt_electron, eps(R)))
+        end
 
         if stiff
             B = (c1*yde*Tc + edot_rest) / rho
@@ -549,21 +632,29 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
             yHeII_x  = R(4) * nHeII                            # ×4 mass-equiv convention
             yHeIII_x = R(4) * nHeIII
             yHeI     = max(nHe4 - yHeII_x - yHeIII_x, zeroR)  # for next substep's cooling/T
-            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
+            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
-                             yHeII_in = yHeII_x, yHeIII_in = yHeIII_x, GamHI = gHI)
+                             yHeII_in = yHeII_x, yHeIII_in = yHeIII_x, GamHI = gHI,
+                             intermediates_current=Val(true))
         elseif uvb_eq
             # consume the up-front He equilibrium (already includes Γ_HeI/Γ_HeII)
-            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
+            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
-                             yHeII_in = yHeII_eq, yHeIII_in = yHeIII_eq, GamHI = gHI)
+                             yHeII_in = yHeII_eq, yHeIII_in = yHeIII_eq, GamHI = gHI,
+                             intermediates_current=Val(true))
         else
-            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM, yH2II,
+            s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
-                             GamHI = gHI, GamHeI = gHeI, GamHeII = gHeII)
+                             GamHI = gHI, GamHeI = gHeI, GamHeII = gHeII,
+                             intermediates_current=Val(true))
         end
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
+        if D
+            neutral_fraction = yHI / max(nH_h, eps(R))
+            minimum_neutral_fraction = min(minimum_neutral_fraction, neutral_fraction)
+            maximum_neutral_fraction = max(maximum_neutral_fraction, neutral_fraction)
+        end
 
         # Enforce H-nuclei conservation (only with a UVB, so the validated no-UVB path
         # is bit-identical).  The operator-split, Gauss-Seidel backward-Euler updates HI
@@ -582,9 +673,24 @@ global Xe_mean), or as n1s directly when `Val(true)`. Pure; allocation-free.
             end
         end
 
-        ttot += dtit
+        ttot = _advance_subcycle_time(ttot, dtit, dt)
     end
 
+    if D
+        return (; e, HII_m=yHII*mh, H2I_m=yH2I*mh,
+                HDI_m=(deuterium ? yHDI*mh : HDI_m),
+                HeII_m=(helium ? R(4)*nHeII*mh : HeII_m),
+                consumed=ttot, iterations=iter, completed=ttot >= dt,
+                hi_formation_steps, hi_depletion_steps, hi_rate_sign_flips,
+                electron_limited_steps, h2_limited_steps,
+                electron_shorter_steps, h2_shorter_steps,
+                neutral_restrictive_steps,
+                energy_limited_steps, remainder_limited_steps,
+                halfstep_limited_steps, minimum_dt_fraction,
+                minimum_electron_dt_fraction, minimum_h2_dt_fraction,
+                minimum_h2_over_electron,
+                minimum_neutral_fraction, maximum_neutral_fraction)
+    end
     return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m),
            (helium ? R(4)*nHeII*mh : HeII_m)
 end
