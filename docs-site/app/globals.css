@@ -94,7 +94,7 @@ footer{max-width:1240px;margin:0 auto;padding:45px 24px;display:flex;justify-con
 
 /* Keep charts interactive without trapping native page gestures on iOS. These
    late overrides intentionally win over the desktop chart defaults above. */
-.plot-canvas-wrap canvas{touch-action:pan-y pinch-zoom}
+.plot-canvas-wrap canvas{touch-action:pan-y}
 .plot-legend{-webkit-overflow-scrolling:touch}
 @media(max-width:900px){.plot-legend{max-height:none;overflow:visible}}
 @media(hover:none),(pointer:coarse){html{scroll-behavior:auto}}
