@@ -18,6 +18,11 @@ test("exports a repository-subpath-safe GitHub Pages site", async () => {
     .map((match) => match[1]);
   assert.ok(assetPaths.length > 0, "expected the exported HTML to reference built assets");
   await Promise.all([...new Set(assetPaths)].map((path) => access(resolve(pagesDir, path))));
+  const cssPaths = [...new Set(assetPaths.filter((path) => path.endsWith(".css")))];
+  assert.ok(cssPaths.length > 0, "expected at least one exported stylesheet");
+  const css = (await Promise.all(cssPaths.map((path) => readFile(resolve(pagesDir, path), "utf8")))).join("\n");
+  assert.match(css, /touch-action:pan-y pinch-zoom/,
+    "plots must leave native vertical touch scrolling enabled");
   await access(resolve(pagesDir, ".nojekyll"));
   await access(resolve(pagesDir, "404.html"));
 });

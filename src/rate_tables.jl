@@ -126,17 +126,17 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
     k_b1s  = cr.b1s * k2_val / (aB * R(1.0e6))      # = cr.b1s·C
     she1, she2 = cr.she
 
-    # Preserve the analytic fits' exact inactive domains. Interpolation must not
-    # smear a positive node across a hard physical branch boundary.
+    # Preserve the molecular fits' exact inactive domains. Interpolation must
+    # not smear a positive node across a hard physical branch boundary.  The
+    # k3/k5 atomic fits have no such boundary: their low-T tails fall naturally
+    # through the floating-point accuracy floor.
     Tev = T / R(11605.0)
-    k3v  = Tev <= R(0.8)  ? zero(R) : rd(4)
-    k5v  = Tev <= R(0.8)  ? zero(R) : rd(6)
     k11v = Tev <= R(0.3)  ? zero(R) : rd(12)
     k12v = Tev <= R(0.3)  ? zero(R) : rd(13)
     k13v = Tev <= R(0.3)  ? zero(R) : rd(14)
     k14v = Tev <= R(0.04) ? zero(R) : rd(15)
     kHeH_ra = rd(31) + rd(32) * cr.HeH_stim
-    base = (; k1=rd(3), k2=k2_val, k3=k3v, k4=rd(5), k5=k5v, k6=rd(7),
+    base = (; k1=rd(3), k2=k2_val, k3=rd(4), k4=rd(5), k5=rd(6), k6=rd(7),
             k7=rd(8), k8=rd(9), k9=rd(10), k10=rd(11), k11=k11v, k12=k12v,
             k13=k13v, k14=k14v, k15=rd(16), k16=rd(17), k17=rd(18), k18=rd(19),
             k19=rd(20), k22=rd(21), k57=rd(22), k58=rd(23),

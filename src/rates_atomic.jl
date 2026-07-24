@@ -15,30 +15,30 @@
 
 # ── k1 : HI + e → HII + 2e ───────────────────────────────────────────────────
 # Fit: Abel et al. (1997), degree-8 exp(poly(logTev)).
-# Branch: always evaluate poly; at Tev≤0.8 return max(tiny, poly_val)
-# (fmax(tiny, k1) at Tev≤0.8 — does NOT early-return, since the boundary
-# T = 9284 K lies in the log-spaced tgrid and the poly value there is
-# 2.23e-16, not tiny).
+# Evaluate the fit through its Boltzmann-suppressed tail.  The historical
+# max(1e-20, fit) below 0.8 eV was a numerical sentinel, not physics: it made
+# cold neutral gas retain a finite collisional-ionisation source.  The
+# exponential fit is monotone there and naturally underflows to exact zero.
 @inline function k1(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     Tev = T / R(11605.0)
-    val = @fastmath begin
+    return @fastmath begin
         x = log(Tev)
         exp(evalpoly(x, (R(-32.71396786375), R(13.53655609057), R(-5.739328757388),
               R(1.563154982022), R(-0.2877056004391), R(0.03482559773736999),
               R(-0.00263197617559), R(0.0001119543953861), R(-2.039149852002e-6))))
     end
-    return Tev <= R(0.8) ? max(R(1e-20), val) : val
 end
 @scalarkernel k1
 
 # ── k3 : HeI + e → HeII + 2e ─────────────────────────────────────────────────
 # Fit: Abel et al. (1997), degree-8 exp(poly(logTev)).
-# Branch: Tev≤0.8 → tiny (returns tiny, not fmax here).
+# No artificial low-T floor; see k1.
 @inline function k3(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     Tev = T / R(11605.0)
-    Tev <= R(0.8) && return R(1e-20)
     return @fastmath begin
         x = log(Tev)
         exp(evalpoly(x, (R(-44.09864886561001), R(23.91596563469), R(-10.75323019821),
@@ -50,11 +50,11 @@ end
 
 # ── k5 : HeII + e → HeIII + 2e ───────────────────────────────────────────────
 # Fit: Abel et al. (1997), degree-8 exp(poly(logTev)).
-# Branch: Tev≤0.8 → tiny.
+# No artificial low-T floor; see k1.
 @inline function k5(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     Tev = T / R(11605.0)
-    Tev <= R(0.8) && return R(1e-20)
     return @fastmath begin
         x = log(Tev)
         exp(evalpoly(x, (R(-68.71040990212001), R(43.93347632635), R(-18.48066993568),

@@ -99,6 +99,21 @@ _relmax(a, b) = maximum(abs.(a .- b)) / (maximum(abs.(b)) + eps())
     @test isapprox(tn.k1, an.k1; rtol = 1e-6)
     @test isapprox(tn.k2, an.k2; rtol = 1e-6)
 
+    # The table follows the unfloored atomic tails instead of imposing a second
+    # 0.8-eV branch. At 3000 K k1 is small but still representable in Float64.
+    Ttail = 3000.0
+    atail = _CK.build_rates(Ttail, Trad, 0.1, Hz)
+    ttail = _CK.table_rates(rt, Ttail, 0.1, Hz, cr)
+    @test 0.0 < ttail.k1 < 1.0e-20
+    @test isapprox(ttail.k1, atail.k1; rtol = 5e-3)
+
+    # k55's low-T continuation is monotone and C¹-matched at 200 K rather
+    # than held at the former 1.08e-22 sentinel.
+    @test _CK.k55(0.0) == 0.0
+    @test issorted(_CK.k55.(10.0 .^ range(0, log10(200.0); length=201)))
+    @test _CK.k55(100.0) < 1.0e-22
+    @test isapprox(_CK.k55(prevfloat(200.0)), _CK.k55(nextfloat(200.0)); rtol=1e-12)
+
     # 5. exact-zero nodes and empty cooling states remain finite in both precisions -----
     for R in (Float64, Float32)
         rtz = _CK.build_rate_tables(; precision = R, backend = :cpu, N = 128)

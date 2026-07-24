@@ -31,8 +31,21 @@ Ts = ChemOracle.tgrid()
                         f32rtol = f32rtol_for(rn))
   end
 
-  @test UnitAtomic.k3(100.0) == 0.0
-  @test UnitAtomic.k5(100.0) == 0.0
+  # The Abel ionisation fits have physical Boltzmann tails. They must pass
+  # continuously below the old 1e-20 sentinel and underflow to zero on their
+  # own; k6 is recombination and correctly rises rather than vanishing at low T.
+  @test UnitAtomic.k1(0.0) == 0.0
+  @test UnitAtomic.k3(0.0) == 0.0
+  @test UnitAtomic.k5(0.0) == 0.0
+  @test UnitAtomic.k1(3000.0) < 1.0e-20
+  @test UnitAtomic.k3(5000.0) < 1.0e-30
+  @test UnitAtomic.k5(10000.0) < 1.0e-30
+  for f in (UnitAtomic.k1, UnitAtomic.k3, UnitAtomic.k5)
+    @test issorted(f.(10.0 .^ range(0, 5; length=301)))
+    Tedge = 0.8 * 11605.0
+    @test isapprox(f(prevfloat(Tedge)), f(nextfloat(Tedge)); rtol=1e-12)
+  end
+  @test UnitAtomic.k6(100.0) > UnitAtomic.k6(1000.0) > 0.0
   @test UnitAtomic.k57(100.0) == 0.0
   @test UnitAtomic.k58(100.0) == 0.0
   @test UnitAtomic.k57(3000.0) < 1.0e-30

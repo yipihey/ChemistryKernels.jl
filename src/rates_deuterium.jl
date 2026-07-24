@@ -79,10 +79,21 @@ end
 @scalarkernel k54
 
 # ── k55  HDI + HI --> H2I + DI  (Galli & Palla 2002 / Shavitt 1959) ─────────
+# The published exp(-4430/T + 173900/T²) fit turns upward below 78.5 K.
+# Grackle replaced the whole T≤200 K domain by 1.08e-22, which avoids the
+# upturn but creates a four-decade jump at 200 K and a nonzero cold-gas floor.
+# Below 200 K continue ln(k) with its boundary slope: this is a C¹-matched
+# Arrhenius tail, stays monotone, and naturally underflows to exact zero.
 @inline function k55(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     if T <= R(2.0e2)
-        return R(1.08e-22)
+        T0 = R(2.0e2)
+        a = R(4.43e3)
+        b = R(1.739e5)
+        ln_k0 = log(R(5.25e-11)) - a / T0 + b / T0^2
+        barrier = a - R(2) * b / T0
+        @fastmath return exp(ln_k0 - barrier * (inv(T) - inv(T0)))
     else
         return R(5.25e-11) * exp(-R(4.43e3)/T + R(1.739e5)/T^2)
     end

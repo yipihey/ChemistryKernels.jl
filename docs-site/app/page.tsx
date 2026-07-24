@@ -37,7 +37,10 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
     const ys: number[] = [];
     data.series.forEach((s, si) => {
       if (hidden.has(si)) return;
-      s.values.forEach((v) => { if (v !== null && v > 0 && Number.isFinite(v)) ys.push(v); });
+      s.values.forEach((v) => {
+        if (v !== null && v > 0 && Number.isFinite(v) &&
+            (data.yFloor === undefined || v >= data.yFloor)) ys.push(v);
+      });
     });
     const xmin = Math.min(...xs), xmax = Math.max(...xs);
     let ymin = Math.min(...ys), ymax = Math.max(...ys);
@@ -102,10 +105,12 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
       let started = false;
       s.values.forEach((v, i) => {
         const xv = data.x[i];
-        if (v === null || v <= 0 || !Number.isFinite(v) || (data.xScale === "log" && xv <= 0)) {
+        if (v === null || v <= 0 || !Number.isFinite(v) ||
+            (data.yFloor !== undefined && v < data.yFloor) ||
+            (data.xScale === "log" && xv <= 0)) {
           started = false; return;
         }
-        const px = X(xv), py = Y(Math.max(v, bounds.ymin));
+        const px = X(xv), py = Y(v);
         if (!started) { c.moveTo(px, py); started = true; } else c.lineTo(px, py);
       });
       c.stroke();
@@ -123,6 +128,9 @@ function ScienceChart({ data }: { data: ScienceDataset }) {
   }, [data, hidden, hover, width, bounds]);
 
   function pointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    // A chart hover is useful for a mouse or pen, but doing React work for every
+    // touchmove makes iOS Safari fight the page's native vertical scrolling.
+    if (e.pointerType === "touch") return;
     const rect = e.currentTarget.getBoundingClientRect();
     const mleft = width < 520 ? 57 : 74;
     const usable = width - mleft - 18;
@@ -398,7 +406,7 @@ export default function Home() {
         </div>
         <div className="atlas-notes">
           <div><b>Reference path</b><span>Analytic fits are evaluated directly and remain the parity anchor.</span></div>
-          <div><b>Plot convention</b><span>Positive values on logarithmic y axes; zeros are omitted and rate panels are visually floored at 10⁻³⁰.</span></div>
+          <div><b>Plot convention</b><span>Positive values on logarithmic y axes; zeros and rate values below the 10⁻³⁰ display-accuracy limit are omitted, never clamped to a physical floor.</span></div>
           <div><b>Regeneration</b><span>The checked-in dataset is rebuilt from the package, keeping documentation tied to code.</span></div>
         </div>
       </section>

@@ -7,10 +7,10 @@
 # per-substep `network_step` call), so it is meaningfully cheaper per substep while
 # reproducing the full network across z=1000→20 AND the first cooling halos.
 #
-# The relic electron freeze-out that catalyzes halo H₂ is captured by the k57/k58
-# H-H / H-He collisional-ionization FLOOR (~1e-20): with n_HI² at halo densities it is
-# the persistent electron source that balances recombination at x_e ≈ √(k57 n_HI²/k2)
-# — validated against the full network and the Grackle reduced oracle.
+# Relic electron freeze-out catalyzes halo H₂.  Neutral-collider ionisation through
+# k57/k58 is retained with its true Boltzmann-suppressed rate; it is not assigned a
+# cold-gas floor.  This lets electrons recombine away instead of manufacturing a
+# persistent source in cold neutral gas.
 #
 # Same contract as `evolve_cell`: pure, allocation-free, precision-generic (R=typeof(e)),
 # GPU-safe.  Returns (e, HII_m, H2I_m, ttot); no HDI (primordial H+H₂ only).
@@ -37,8 +37,8 @@ end
 # large (cooling-limited): y bounces, i.e. the spurious x_HII step-to-step oscillation
 # at z≳1600 where H is Saha-pinned to the CMB.  Treating the linear term implicitly
 # removes the overshoot — the equilibrium is the true radiative-balance (Saha/Peebles)
-# ionisation, reached monotonically.  `q` keeps the genuinely-nonlinear collisional
-# floor (k57·n_HI² + k58·…) frozen (∝n_HI², negligible at high z, ~constant at collapse
+# ionisation, reached monotonically.  `q` keeps the genuinely-nonlinear neutral-collider
+# source (k57·n_HI² + k58·…) frozen (∝n_HI², negligible at high z, ~constant at collapse
 # where n_HI≈C).  Reduces to `_riccati(scH=q)` when p→0 (the cold collapse regime).
 @inline function _riccati2(y0::R, k2::R, p::R, q::R, C::R, dt::R) where {R}
     d = q + p*C                                            # dy/dt = d − p·y − k2·y²
@@ -175,7 +175,7 @@ convention, `H2I_m` = 2·n(H₂)·m_H).  Pure; ~2× cheaper per substep than `ev
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R); edot = zero(R); end
         hubble_expansion && (edot -= R(2) * Hz_ad * e * rho)
 
-        # ── HII: recomb (k2) vs the k57/k58 collisional-ionization floor + CMB photo-ion ──
+        # ── HII: recomb (k2) vs neutral-collider ionisation + CMB photo-ion ──
         scH = k1v*yHI*yde + k57v*yHI*yHI + k58v*yHI*yHeI/R(4) + kb1s*yHI
         acH = k2*yde
         # ── H₂: H⁻ channel + H₂⁺ channel (both closed-form) + 3-body, vs dissociation ──
@@ -407,7 +407,8 @@ iteration count, not the rate fits), so the fits remain the default.
         #    LINEAR in n_HI = C − y ⇒ carried as the implicit −p·y depletion (p = kb1s +
         #    k1·n_e); this removes the frozen-source overshoot that made x_HII oscillate
         #    step-to-step at z≳1600 (H Saha-pinned).  The genuinely-nonlinear collisional
-        #    floor k57·n_HI² + k58·n_HI·n_HeI stays frozen in q.  C = n_HI + n_HII. ──
+        #    neutral-collider source k57·n_HI² + k58·n_HI·n_HeI stays frozen in q.
+        #    C = n_HI + n_HII. ──
         yHII_rate = yHII
         yde_rate = yde
         pion = kb1s + k1v*yde
