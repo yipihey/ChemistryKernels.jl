@@ -114,6 +114,13 @@ _relmax(a, b) = maximum(abs.(a .- b)) / (maximum(abs.(b)) + eps())
     @test _CK.k55(100.0) < 1.0e-22
     @test isapprox(_CK.k55(prevfloat(200.0)), _CK.k55(nextfloat(200.0)); rtol=1e-12)
 
+    # Savin's k50 difference fit crosses slightly negative below its useful
+    # range. Both analytic and table paths represent that inactive tail as zero.
+    @test _CK.k50(0.0) == 0.0
+    @test _CK.k50(1.0) == 0.0
+    k50tab = _CK.table_rates(rt, 1.0, 0.1, Hz, cr; deuterium=true)
+    @test k50tab.k50 == 0.0
+
     # 5. exact-zero nodes and empty cooling states remain finite in both precisions -----
     for R in (Float64, Float32)
         rtz = _CK.build_rate_tables(; precision = R, backend = :cpu, N = 128)

@@ -15,7 +15,13 @@ ChemOracle.set_flags!(); Ts = ChemOracle.tgrid()
     refall = [ChemOracle.rate(rn, t) for t in Tall]
     # Grackle's k55=1.08e-22 branch is a numerical sentinel, not the
     # Shavitt/Galli-Palla fit. Compare the shared fit above its 200 K boundary.
-    keep = rn == "k55" ? findall(>(200.0), Tall) : eachindex(Tall)
+    keep = if rn == "k50"
+      findall(>(0.0), refall)
+    elseif rn == "k55"
+      findall(>(200.0), Tall)
+    else
+      eachindex(Tall)
+    end
     check_scalar_kernel(rn, getfield(UnitDeut, Symbol(rn, "_grid")),
                         refall[keep], Tall[keep])
   end

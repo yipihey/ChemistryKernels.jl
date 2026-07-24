@@ -16,9 +16,14 @@ export k56, k56_grid
 # ── k50  HII + DI --> HI + DII  (Savin 2002) ────────────────────────────────
 @inline function k50(T::Real)
     R = typeof(T)
+    T > zero(R) || return zero(R)
     if T <= R(2.0e5)
-        return R(2.0e-10) * T^R(0.402) * exp(-R(3.71e1)/T) -
-               R(3.31e-17) * T^R(1.48)
+        # The difference fit becomes slightly negative below its useful range.
+        # A rate coefficient cannot be negative; exact zero also matches the
+        # table path's existing representation of non-positive nodes.
+        val = R(2.0e-10) * T^R(0.402) * exp(-R(3.71e1)/T) -
+              R(3.31e-17) * T^R(1.48)
+        return max(zero(R), val)
     else
         return R(2.5e-8) * (T / R(2.0e5))^R(0.402)
     end
