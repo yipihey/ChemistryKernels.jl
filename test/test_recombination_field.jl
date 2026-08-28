@@ -118,9 +118,13 @@ ref_aB(T) = 1.0e-19*4.309*(T/1e4)^(-0.6166) / (1 + 0.6703*(T/1e4)^0.53)
 
 # From-scratch Peebles k2 [cm³/s] (re-derives KL/KB/C; mirror of peebles_k2_mixing
 # but built from the textbook constants above, NOT by calling the routine).
-function ref_peebles_k2(T, nHI_local, nHI_eff, Hz; fudge=1.0, gauss=1.0)
+function ref_peebles_k2(T, nHI_local, nHI_eff, Hz;
+                        fudge=1.0, gauss=1.0, Trad=T)
     aB  = ref_aB(T)
-    bet = aB*(_CR*T)^1.5*exp(-_CDB/T)
+    # The reverse rate is fixed by detailed balance with the CMB.  Its
+    # recombination coefficient and photon phase-space factor therefore both
+    # use Trad; only the forward recombination coefficient above uses T_m.
+    bet = ref_aB(Trad)*(_CR*Trad)^1.5*exp(-_CDB/Trad)
     K   = gauss*_LAM^3/(8π*Hz)
     KL  = K*_A8*(nHI_eff*1e6)
     KB  = K*bet*(nHI_local*1e6)
@@ -144,7 +148,8 @@ function ref_bin_step(x, T, Trad, nH, Hz, fudge, gauss, fa, n1s_sm, dt)
     while t < dt
         n1s_local = (1 - x)*nH
         n1s_eff   = fa*n1s_sm + (1 - fa)*n1s_local
-        k2  = ref_peebles_k2(T, n1s_local, n1s_eff, Hz; fudge=fudge, gauss=gauss)
+        k2  = ref_peebles_k2(T, n1s_local, n1s_eff, Hz;
+                             fudge=fudge, gauss=gauss, Trad=Trad)
         kb  = ref_kb1s(T, Trad, k2)
         rate = k2*nH*x + kb + 1e-30
         ds  = min(dt - t, 0.1/rate)
@@ -342,7 +347,10 @@ end
     # to <0.1% vs CAMB: He fully neutral, β₁s negligible — see recfast_v2_comparison).
     # Tolerance 2%: the irreducible gap is the routine's closed H₂⁺ photodissociation
     # cycle (~1.5% at z≈1100, which the H-only reference omits) + two stiff integrators.
-    z0, z1, ns = 1200.0, 700.0, 200
+    # Use the same resolved cosmological macro-step count as the homogeneous
+    # RECFAST gate. The smoothed neutral field is intentionally lagged for one
+    # macro-step, so a coarser host grid contaminates this physics comparison.
+    z0, z1, ns = 1200.0, 700.0, 600
     Δ, w = lognormal_field(b=0.5, M=200)
     T0 = Tb_camb(z0); x0 = xe_camb(z0)
     zR, xeR = run_routine_field_history(; z_start=z0, z_end=z1, n_steps=ns, Δ=Δ, w=w,
@@ -356,7 +364,7 @@ end
 end
 
 @testset "test2_bracket_limits" begin
-    z0, z1, ns = 1200.0, 700.0, 200
+    z0, z1, ns = 1200.0, 700.0, 600
     Δ, w = lognormal_field(b=0.5, M=200)
     T0 = Tb_camb(z0); x0 = xe_camb(z0)
 
@@ -400,7 +408,7 @@ end
     # pre-smoothed field, it does not smooth.)  n1s_eff = W·n_local + (1−W)·⟨n1s⟩, so
     # W→1 ≡ no-mix, W→0 ≡ full-mix; the map is exactly linear in W (n1s_effective is a
     # branch-free muladd) ⇒ x_e must be smooth (C¹) in W.
-    A = 0.4; N = 48; z0, z1, ns = 1200.0, 700.0, 150
+    A = 0.4; N = 48; z0, z1, ns = 1200.0, 700.0, 600
     Δ = sinusoid_field(A, N); w = fill(1.0/N, N); T0 = Tb_camb(z0); x0 = xe_camb(z0)
     zc = 900.0                                               # comparison redshift
     Ws = collect(range(0.05, 1.0; length=13))
@@ -444,7 +452,7 @@ end
 @testset "A0_homogeneous_gate" begin
     # A→0: homogeneous field, full mixing ⇒ must collapse to the CAMB/RECFAST-v2
     # fixture (ties the field driver back to the existing homogeneous reference).
-    z0, z1, ns = 1200.0, 700.0, 250
+    z0, z1, ns = 1200.0, 700.0, 600
     Δ = ones(8); w = fill(1.0/8, 8); T0 = Tb_camb(z0)
     zr, xr = run_routine_field_history(; z_start=z0, z_end=z1, n_steps=ns, Δ=Δ, w=w,
                                         fa=1.0, smoothing=sm_mean(w), T0=T0,
@@ -456,7 +464,7 @@ end
 
 @testset "physics_sanity_tie" begin
     # b=0.5 lognormal, full mixing vs none: x_e drops a few%–~20%, growing toward low z.
-    z0, z1, ns = 1200.0, 700.0, 200
+    z0, z1, ns = 1200.0, 700.0, 600
     Δ, w = lognormal_field(b=0.5, M=200); T0 = Tb_camb(z0); x0 = xe_camb(z0)
     zr0, xv0 = run_routine_field_history(; z_start=z0, z_end=z1, n_steps=ns, Δ=Δ, w=w,
                                           fa=0.0, smoothing=sm_local, T0=T0, x0=x0)

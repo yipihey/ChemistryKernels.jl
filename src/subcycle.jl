@@ -65,7 +65,8 @@ all others are the Wave-1 analytic fits. Pure.
 # ONCE per cell and reuses it every iteration — hoisting ~5 transcendentals/iter out
 # of the per-iteration `build_rates`.  isbits NamedTuple ⇒ free in a GPU kernel.
 @inline function cmb_rates(Trad)
-    return (; b1s = beta1s_freq(Trad), k27 = k27_cmb(Trad), k28 = k28_cmb(Trad),
+    return (; b1s = beta1s_freq(Trad), bet = _recfast_beta_excited(Trad),
+            k27 = k27_cmb(Trad), k28 = k28_cmb(Trad),
             gamma_HeH = gamma_HeH_cmb(Trad), HeH_stim = HeH_stim_factor(Trad),
             she = helium_saha_pair(Trad))
 end
@@ -79,7 +80,7 @@ end
 
 @inline function _build_rates_cr(T, nHI, Hz, cr; deuterium::Bool = false)
     R = typeof(T)
-    k2_val = peebles_k2(T, nHI, Hz)
+    k2_val = _peebles_k2_from_beta(T, nHI, Hz, cr.bet)
     # C-weighted β₁s: matches k2=α_B×C so equilibrium gives true Saha (C cancels).
     # At high z (xe≈1, nHI≈0): C→1, k_beta1s→β₁s (drives Saha).
     # At z≈1200 (C≈0.006): k_beta1s negligible vs recombination → freeze-out preserved.
@@ -87,8 +88,9 @@ end
     # temperature Trad, not the matter T.  At recombination T≈Trad so this is unchanged;
     # under a low-z UV background the gas heats to T≫Trad, and beta1s_freq(T) would
     # otherwise spuriously drive H to Saha equilibrium at the hot matter temperature (no
-    # CMB photons exist to do that — Trad is cold).  The Peebles C-factor (k2/α_B) stays
-    # at the matter T.
+    # CMB photons exist to do that -- Trad is cold). The excited-state
+    # photoionization term inside the Peebles factor is likewise fixed by Trad;
+    # only the recombination coefficient is evaluated at the matter temperature.
     k_b1s = cr.b1s * k2_val / (recfast_alpha(T) * R(1.0e6))
     she1, she2 = cr.she     # He Saha factors at Trad (→ fully neutral He at low z)
     kHeH_ra = kHeH_ra_spont(T) + kHeH_ra_stim_base(T) * cr.HeH_stim

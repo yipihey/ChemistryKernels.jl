@@ -11,7 +11,8 @@
 # (see the unit reduction: utem = mh·v²/kB, nd_code = n·mh/ρu, e_code = e/v², ρ_code = ρ/ρu
 # ⇒ all units cancel to (Γ-1)·ρ·e/(kB·n)).  Pure & allocation-free (AD-friendly).
 
-export gas_temperature, temperature_from_reduced, temperature_grid
+export gas_temperature, temperature_from_reduced,
+       temperature_from_reduced_helium, temperature_grid
 
 # Default Gamma (5/3) and minimum returned temperature (1 K).
 const GAMMA_DEFAULT = 5.0 / 3.0          # adiabatic index Gamma
@@ -87,6 +88,42 @@ H⁻/H2⁺ = zero — the reduced-network reconstruction — then
     nHeI = (one(R) - R(fh)) * rho / (R(4) * mh)
     return gas_temperature(rho, eint, nHI, nHII, nHeI, z, z, nHII,
                            z, nH2, z; gamma = gamma)
+end
+
+"""
+    temperature_from_reduced_helium(rho, eint, HIImass, H2Imass, HeIImass, z;
+                                    fh, gamma)
+
+Temperature for a reduced H/H2 network that carries He+ mass explicitly.
+He++ remains in instantaneous Saha equilibrium, matching
+`evolve_cell_mixing(...; helium=true)`. The electron and helium particle counts
+therefore use the same closure as the chemistry energy update.
+"""
+@inline function temperature_from_reduced_helium(rho, eint, HIImass, H2Imass,
+                                                 HeIImass, z;
+                                                 fh = FH_DEFAULT,
+                                                 gamma = GAMMA_DEFAULT)
+    R = typeof(eint)
+    mh = R(MH)
+    zeroR = zero(R)
+    nH = max(R(fh) * rho / mh, zeroR)
+    nHII = max(HIImass / mh, zeroR)
+    nH2 = max(H2Imass / (R(2) * mh), zeroR)
+    nHI = max(nH - nHII - R(2) * nH2, zeroR)
+    nHe = max((one(R) - R(fh)) * rho / (R(4) * mh), zeroR)
+    nHeII = clamp(max(HeIImass / (R(4) * mh), zeroR), zeroR, nHe)
+    if nH > zeroR
+        xHII = nHII / nH
+        xHeII = nHeII / nH
+        xe = total_electron_fraction(xHII, xHeII, nH, comp2_cmb(R(z)); fh=fh)
+        nHeIII = clamp((xe - xHII - xHeII) * nH / R(2),
+                       zeroR, max(nHe - nHeII, zeroR))
+        nHeI = max(nHe - nHeII - nHeIII, zeroR)
+        nde = nHII + nHeII + R(2) * nHeIII
+        return gas_temperature(rho, eint, nHI, nHII, nHeI, nHeII, nHeIII,
+                               nde, zeroR, nH2, zeroR; gamma=gamma)
+    end
+    return R(MIN_TEMPERATURE)
 end
 
 # ── device launcher (mirrors @scalarkernel; reconstructs + computes per cell) ──

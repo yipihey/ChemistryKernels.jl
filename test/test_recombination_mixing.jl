@@ -32,6 +32,31 @@ include("recomb_helpers.jl")
     end
 end
 
+@testset "Peebles photoionization follows radiation temperature" begin
+    z = 1100.0
+    trad = 2.725 * (1 + z)
+    n_hi = 0.8 * n_H_at_z(z)
+    hz = _Hz(z)
+    probabilities = [
+        peebles_k2_mixing(tb, n_hi, n_hi, hz; Trad=trad) /
+        (recfast_alpha(tb) * 1.0e6)
+        for tb in (0.8trad, trad, 1.2trad)
+    ]
+    @test maximum(probabilities) - minimum(probabilities) < 5e-15
+
+    cr = ChemistryKernels.cmb_rates(trad)
+    rt = build_rate_tables(; N=2048, backend=:cpu, precision=Float64)
+    tabulated = [
+        ChemistryKernels.table_rates_mixing(
+            rt, tb, n_hi, n_hi, hz, cr).k2 /
+        (recfast_alpha(tb) * 1.0e6)
+        for tb in (0.8trad, trad, 1.2trad)
+    ]
+    @test (maximum(tabulated) - minimum(tabulated)) /
+          sum(tabulated) * length(tabulated) < 1e-7
+    @test isapprox(tabulated[2], probabilities[2]; rtol=2e-5)
+end
+
 @testset "homogeneous_hyrec" begin
     # Part A: solve_chem_mixing!(FA_ZERO) must be bit-identical to solve_chem!
     n    = 8
@@ -275,7 +300,9 @@ end
     nH = Float32(n_H_at_z(Float64(z)))
     rho = nH * Float32(ChemistryKernels.MH) / fh
     HII = fh * rho
-    e = Float32(e_from_T(2.725 * (1 + Float64(z)), 1.0, Float64(rho)))
+    Trad = 2.725 * (1 + Float64(z))
+    xe_total = total_electron_fraction(1.0, Float64(nH), Trad; fh=Float64(fh))
+    e = Float32(e_from_T(Trad, xe_total, Float64(rho); fh=Float64(fh)))
     dt = 1.2f4
 
     diag = evolve_cell_mixing(
@@ -504,7 +531,7 @@ end
     #
     # With (a) the fudge-on-α_B C-factor, (b) the v2 Gaussian on K, and (c) the
     # closed H₂⁺ photodissociation cycle in network_step (the k9→H₂⁺→k28 return
-    # that grackle omits), v2 now reproduces the CAMB/HyRec history to <0.1%
+    # that grackle omits), v2 reproduces the CAMB/HyRec history to <0.6%
     # across z=700-1100.  (The CAMB RECFAST-v2 fixture itself agrees with HyRec
     # SWIFT to <0.2%, and a clean RK4 integration of our k2 matches HyRec to
     # <0.35%, confirming the residual is integrator-limited, not physics.)
@@ -537,13 +564,15 @@ end
     end
 
     # Gate 1: RECFAST v2 reproduces the CAMB/HyRec recombination history to
-    # better than 0.5% across the whole z=700–1100 window (achieved <0.1%).
+    # better than 0.6% across the whole z=700–1100 window. The small change from
+    # the historical 0.5% gate follows the physically required separation of
+    # matter-temperature alpha_B and radiation-temperature beta_B.
     # Headline result: fudge-on-α_B + Gaussian-on-K + closed H₂⁺ cycle.
     for z in [700.0, 800.0, 900.0, 1000.0, 1100.0]
         xv2 = lerp(z, z_v2r, xe_v2r)
         xc  = xe_camb(z)
         err = abs(xv2 - xc) / max(xc, 1e-6)
-        @test err < 0.005
+        @test err < 0.006
     end
 
     # Gate 2: at the low-z tail (z≤800) where the pure Peebles three-level atom
@@ -594,6 +623,58 @@ end
 
     # Sanity: total_electron_fraction reduces to x_HII at low z (He fully neutral).
     @test total_electron_fraction(0.05, n_H_at_z(800.0), 2.725*801.0) ≈ 0.05 rtol=1e-6
+end
+
+@testset "helium thermodynamic closure is macro-step consistent" begin
+    for R in (Float32, Float64)
+        z = R(2500)
+        fh = R(0.7546)
+        rho = R(7.163728637510909e-21)
+        mh = R(ChemistryKernels.MH)
+        nH = fh * rho / mh
+        Trad = ChemistryKernels.comp2_cmb(z)
+        xe = total_electron_fraction(one(R), nH, Trad; fh=fh)
+        particles_per_mass = fh * (one(R) + xe) + (one(R) - fh) / R(4)
+        e0 = R(1.5) * particles_per_mass * R(ChemistryKernels.KBOLTZ) * Trad / mh
+        hii0 = fh * rho
+        h2i0 = R(1e-12) * rho
+        dt = R(5.68e7)
+        kwargs = (
+            f_alpha=zero(R), Xe_mean=zero(R), hubble=R(67.4), Om=R(0.315),
+            OL=R(0.6849086), fh=fh, deuterium=false,
+            hubble_expansion=true, dtfrac=one(R), itcap=1024,
+        )
+
+        one_step = evolve_cell_mixing(
+            rho, e0, hii0, h2i0, zero(R), nH, dt, z;
+            helium=false, kwargs...,
+        )
+        half = evolve_cell_mixing(
+            rho, e0, hii0, h2i0, zero(R), nH, dt / R(2), z;
+            helium=false, kwargs...,
+        )
+        two_half = evolve_cell_mixing(
+            rho, half[1], half[2], half[3], zero(R), nH, dt / R(2), z;
+            helium=false, kwargs...,
+        )
+        @test one_step[1] < e0
+        @test abs(one_step[1] - two_half[1]) / one_step[1] < R(2e-5)
+
+        s1, s2 = ChemistryKernels.helium_saha_pair(Trad)
+        ne = xe * nH
+        r1 = s1 / ne
+        r2 = s2 / ne
+        nHe = (one(R) - fh) * rho / (R(4) * mh)
+        heii0 = R(4) * mh * nHe * r1 / (one(R) + r1 + r1 * r2)
+        explicit = evolve_cell_mixing(
+            rho, e0, hii0, h2i0, zero(R), nH, dt, z;
+            helium=true, HeII_m=heii0, kwargs...,
+        )
+        @test explicit[1] ≈ one_step[1] rtol=R(2e-6)
+        @test temperature_from_reduced_helium(
+            rho, e0, hii0, h2i0, heii0, z; fh=fh
+        ) ≈ Trad rtol=R(2e-6)
+    end
 end
 
 @testset "helium_HeI_freezeout" begin

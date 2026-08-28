@@ -115,12 +115,12 @@ from the interpolated `aB`/`bet` and the hoisted Trad terms `cr` (β₁s, k27, k
     L = rt.logk; N = rt.N
     @inline rd(c) = _rt_lookup(L, N, i, f, c)
 
-    aB  = rd(1); bet = rd(2)
+    aB = rd(1)
     # Peebles C-factor (Sobolev escape), exactly as peebles_k2 but on tabulated aB/bet.
     n1s = nHI * R(1.0e6)
     Kf  = R(_REC_LAM)^3 / (R(8.0) * R(π) * Hz)
     KL  = Kf * R(_REC_A8) * n1s
-    KB  = Kf * bet * n1s
+    KB  = Kf * R(cr.bet) * n1s
     C   = (one(R) + KL) / (one(R) + KL + KB)
     k2_val = aB * R(1.0e6) * C
     k_b1s  = cr.b1s * k2_val / (aB * R(1.0e6))      # = cr.b1s·C

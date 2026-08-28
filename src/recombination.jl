@@ -58,24 +58,33 @@ Returns m³/s — same unit convention as `peebles_k2`.
            (one(R) + R(0.6703) * tt^R(0.5300))
 end
 
+@inline function _recfast_beta_excited(T::Real)
+    R = typeof(T)
+    return recfast_alpha(T) * (R(_REC_CR) * T)^R(1.5) *
+           exp(-R(_REC_CDB) / T)
+end
+
+@inline function _peebles_k2_from_beta(T, nHI, Hz, bet)
+    R = typeof(T)
+    aB = recfast_alpha(T)
+    n1s = nHI * R(1.0e6)
+    K = R(_REC_LAM)^3 / (R(8.0) * R(pi) * Hz)
+    KL = K * R(_REC_A8) * n1s
+    KB = K * R(bet) * n1s
+    C = (one(R) + KL) / (one(R) + KL + KB)
+    return aB * R(1.0e6) * C
+end
+
 """
-    peebles_k2(T, nHI, Hz)
+    peebles_k2(T, nHI, Hz; Trad=T)
 
 CaseB H recombination rate k2 [cm³/s] with the Peebles C-factor suppression, at
 temperature `T` [K], neutral-H number density `nHI` [cm⁻³], and Hubble rate `Hz`
-[s⁻¹]. Pure.
+[s⁻¹]. `Trad` sets the excited-state photoionization coefficient; it defaults
+to `T` for the traditional homogeneous calculation. Pure.
 """
-@inline function peebles_k2(T, nHI, Hz)
-    R   = typeof(T)
-    aB  = recfast_alpha(T)                               # α_B [m³/s]
-    n1s = nHI * R(1.0e6)                                  # cm⁻³ → m⁻³
-    bet = aB * (R(_REC_CR) * T)^R(1.5) * exp(-R(_REC_CDB) / T)
-    K   = R(_REC_LAM)^3 / (R(8.0) * R(π) * Hz)
-    KL  = K * R(_REC_A8) * n1s
-    KB  = K * bet * n1s
-    C   = (one(R) + KL) / (one(R) + KL + KB)             # rec_fu = 1
-    return aB * R(1.0e6) * C                              # m³/s → cm³/s
-end
+@inline peebles_k2(T, nHI, Hz; Trad=T) =
+    _peebles_k2_from_beta(T, nHI, Hz, _recfast_beta_excited(Trad))
 
 """
     beta1s_freq(T) -> β₁s [s⁻¹]
@@ -88,10 +97,7 @@ maintaining Saha equilibrium at z > 2000. Pure; allocation-free.
 """
 @inline function beta1s_freq(T::Real)
     R   = typeof(T)
-    tt  = T / R(1.0e4)
-    aB  = R(1.0e-19) * R(4.309) * tt^R(-0.6166) /
-          (one(R) + R(0.6703) * tt^R(0.5300))             # α_B [m³/s]
-    bet = aB * (R(_REC_CR) * T)^R(1.5) * exp(-R(_REC_CDB) / T)   # β₂p
+    bet = _recfast_beta_excited(T)                         # β₂p
     return bet * exp(-R(_CHI_H_K - _REC_CDB) / T)                 # β₁s [s⁻¹]
 end
 
@@ -166,13 +172,19 @@ He⁺, otherwise the freeze-out (z≈2000-2500) is lost to Saha. Pure.
                                          fh::Real = FH_DEFAULT, niter::Int = 6)
     R = typeof(xHII)
     _, s2 = helium_saha_pair(R(Trad))
-    xe = R(xHII) + R(xHeII)                          # initial guess (He⁺⁺ ≈ 0)
-    for _ in 1:niter
-        ne     = max(xe * R(nH), R(1.0e-30))
-        xHeIII = R(xHeII) * s2 / ne                  # n_HeIII/n_H = xHeII·S2/n_e
-        xe     = R(xHII) + R(xHeII) + R(2) * xHeIII
-    end
-    return xe
+    _ = niter # retained for source compatibility with the former iteration.
+    base = max(R(xHII), zero(R)) + max(R(xHeII), zero(R))
+    coefficient = R(2) * max(R(xHeII), zero(R)) * s2 /
+                  max(R(nH), R(1.0e-30))
+    # xe = base + 2*xHeIII and xHeIII = xHeII*S2/(nH*xe).
+    # Solve xe^2 - base*xe - coefficient = 0 exactly rather than leaving a
+    # high-z fixed-point residual where HeIII dominates.
+    xe_unbounded = R(0.5) * (base + sqrt(max(base * base + R(4) * coefficient,
+                                             zero(R))))
+    fHe = (one(R) - R(fh)) / (R(4) * R(fh))
+    xHeIII = clamp((xe_unbounded - base) / R(2), zero(R),
+                   max(fHe - R(xHeII), zero(R)))
+    return base + R(2) * xHeIII
 end
 
 """

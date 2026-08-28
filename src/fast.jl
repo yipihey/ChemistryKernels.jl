@@ -157,7 +157,7 @@ convention, `H2I_m` = 2·n(H₂)·m_H).  Pure; ~2× cheaper per substep than `ev
         # closed form.  The sub-dominant H⁻ destruction terms (k14,k16-k19) are dropped
         # (they matter only when x_HII~1 at recombination, where f_H2≪1e-6 anyway).
         if rate_tables === nothing
-            k2   = peebles_k2(T, yHI, Hz)
+            k2   = peebles_k2(T, yHI, Hz; Trad=Tc)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k11v=k11(T); k12v=k12(T)
             k13v=k13(T); k15v=k15(T); k22v=k22(T); k57v=k57(T); k58v=k58(T)
@@ -318,8 +318,8 @@ iteration count, not the rate fits), so the fits remain the default.
             # cleanly cancelling, so leave it off.  Un-fudged in the collapse (dense gas).
             k2   = (evolve_z && zt < R(1600)) ?
                    peebles_k2_mixing(T, yHI, yHI, Hz; fudge = R(1.125),
-                                     gauss = recfast_gauss_factor(zt)) :
-                   peebles_k2(T, yHI, Hz)
+                                     gauss = recfast_gauss_factor(zt), Trad=Tc) :
+                   peebles_k2(T, yHI, Hz; Trad=Tc)
             kb1s = beta1s_freq(Tc) * k2 / (recfast_alpha(T) * R(1.0e6))
             k1v=k1(T); k7v=k7(T); k8v=k8(T); k9v=k9(T); k10v=k10(T); k15v=k15(T)
             k11v=k11(T); k12v=k12(T); k13v=k13(T); k14v=k14(T); k16v=k16(T); k17v=k17(T); k19v=k19(T)
