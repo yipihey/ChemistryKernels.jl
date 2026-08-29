@@ -411,6 +411,11 @@ as total n_H when `smoothed_is_neutral=Val(false)` (default; approximates n1s vi
 global Xe_mean), or as n1s directly when `Val(true)`. `diagnostics=Val(true)`
 returns a named tuple with the final state, consumed time, iteration count, and
 timestep-limiter counters for scalar convergence analysis. Pure; allocation-free.
+
+With `neutral_hydrogen_storage=Val(true)`, the `HII_m` input and second returned
+field carry neutral-H mass density instead. This complement representation retains
+high-ionization perturbations below an ULP of the ionized fraction; HII is
+reconstructed locally from hydrogen conservation for the network update.
 """
 @inline function evolve_cell_mixing(rho, e, HII_m, H2I_m, HDI_m,
                                     n_sm_cgs, dt, z;
@@ -436,7 +441,8 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
                                     itcap::Int = _SUB_ITMAX,
                                     species_limiter::Val{SL} = Val(:gated_electron),
                                     h2_fraction_floor::Real = 1.0e-12,
-                                    diagnostics::Val{D} = Val(false)) where {SN,SL,D}
+                                    diagnostics::Val{D} = Val(false),
+                                    neutral_hydrogen_storage::Val{NH} = Val(false)) where {SN,SL,D,NH}
     R    = typeof(e)
     mh   = R(MH); zeroR = zero(R)
     d    = rho / mh
@@ -447,10 +453,19 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
     nHe  = nHe4 / R(4)                          # total He number density [cm⁻³]
     nH_h = R(fh) * d                            # hydrogen number density [cm⁻³]
     fHe  = nH_h > zeroR ? nHe / nH_h : zeroR    # n_He/n_H
-    yHII  = max(HII_m / mh, zeroR)
     yH2I  = max(H2I_m / mh, zeroR)
     yHDI  = deuterium ? max(HDI_m / mh, zeroR) : zeroR
-    yHI   = max((R(fh)*rho - HII_m - H2I_m) / mh, zeroR)
+    if NH
+        # Near complete ionization, storing HII discards the neutral complement
+        # and its perturbations when fh*rho-HII falls below a Float32 ULP.  The
+        # neutral-storage contract carries HI directly and reconstructs HII only
+        # inside this cell-local update, where both variables remain available.
+        yHI = min(max(HII_m / mh, zeroR), max(nH_h - yH2I, zeroR))
+        yHII = max(nH_h - yHI - yH2I, zeroR)
+    else
+        yHII = max(HII_m / mh, zeroR)
+        yHI = max((R(fh)*rho - HII_m - H2I_m) / mh, zeroR)
+    end
     # Start every macro-step with the same He/electron closure used by
     # `network_step`. Previously the first thermodynamic half-step always saw
     # neutral He and n_e=n_HII, then the network inserted equilibrium He
@@ -678,19 +693,22 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
             s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
                              yHeII_in = yHeII_x, yHeIII_in = yHeIII_x, GamHI = gHI,
-                             intermediates_current=Val(true))
+                             intermediates_current=Val(true),
+                             neutral_hydrogen_storage=Val(NH))
         elseif equilibrium_helium
             # Consume the same up-front He equilibrium used by the temperature
             # and cooling update (including optional UV photoionisation).
             s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
                              yHeII_in = yHeII_eq, yHeIII_in = yHeIII_eq, GamHI = gHI,
-                             intermediates_current=Val(true))
+                             intermediates_current=Val(true),
+                             neutral_hydrogen_storage=Val(NH))
         else
             s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                              yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
                              GamHI = gHI, GamHeI = gHeI, GamHeII = gHeII,
-                             intermediates_current=Val(true))
+                             intermediates_current=Val(true),
+                             neutral_hydrogen_storage=Val(NH))
         end
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
@@ -721,7 +739,8 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
     end
 
     if D
-        return (; e, HII_m=yHII*mh, H2I_m=yH2I*mh,
+        return (; e, HII_m=yHII*mh,
+                stored_hydrogen_m=(NH ? yHI : yHII)*mh, H2I_m=yH2I*mh,
                 HDI_m=(deuterium ? yHDI*mh : HDI_m),
                 HeII_m=(helium ? R(4)*nHeII*mh : HeII_m),
                 consumed=ttot, iterations=iter, completed=ttot >= dt,
@@ -735,7 +754,8 @@ timestep-limiter counters for scalar convergence analysis. Pure; allocation-free
                 minimum_h2_over_electron,
                 minimum_neutral_fraction, maximum_neutral_fraction)
     end
-    return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m),
+    return e, (NH ? yHI : yHII)*mh, yH2I*mh,
+           (deuterium ? yHDI*mh : HDI_m),
            (helium ? R(4)*nHeII*mh : HeII_m)
 end
 

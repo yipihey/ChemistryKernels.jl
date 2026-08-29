@@ -106,7 +106,8 @@ transcription for standalone callers.
                               GamHI = 0.0, GamHeI = 0.0, GamHeII = 0.0,
                               dust_rates = nothing,
                               intermediates_current::Val{IC} = Val(false),
-                              stiff_h2_pair::Val{SP} = Val(false)) where {IC,SP}
+                              stiff_h2_pair::Val{SP} = Val(false),
+                              neutral_hydrogen_storage::Val{NH} = Val(false)) where {IC,SP,NH}
     R    = typeof(yHI)
     z    = zero(R)
     two  = R(2); half = R(0.5); three = R(3); four = R(4)
@@ -201,10 +202,39 @@ transcription for standalone callers.
     sc_other = k10*H2IIeq*yHI/two + k28*nH2II
     ac_grr = dust_rates !== nothing ? dust_rates.k_grr * yde : zero(R)
     ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM + ac_grr
-    HIIp = (yHII + (qion*Hatomic + sc_other)*dt) /
-           (one(R) + (qion + ac)*dt)
-    HIIp = clamp(HIIp, z, Hatomic)
-    HIp = Hatomic - HIIp
+    atomic_denominator = one(R) + (qion + ac)*dt
+    if NH
+        # Advance the small neutral complement directly. Forming HII first and
+        # subtracting it from Hatomic loses the Saha neutral fraction in Float32
+        # throughout the highly ionized recombination regime. Hatomic excludes
+        # the algebraic intermediaries, so remove their old-state budgets from
+        # the directly carried free-HI abundance as well.
+        HIatomic = clamp(yHI - HMp - H2IIeq - h_in_hd, z, Hatomic)
+        # The H2+ association and CMB photodissociation terms are separately
+        # enormous at high redshift. Use the algebraic H2+ balance to cancel
+        # their reversible part analytically, leaving only positive residual
+        # destruction channels. This is algebraically equivalent to
+        # ac*Hatomic-sc_other when the old state conserves H nuclei.
+        atomic_recombination = k2*yde + k16*HMp + ac_grr
+        h2ii_association = k9*yHI + k11*yH2I/two + k17*HMp
+        h2ii_nonreturn = (k18*yde + k19*HMp)*nH2II
+        neutral_source = atomic_recombination*Hatomic +
+                         h2ii_association*HIatomic + h2ii_nonreturn
+        atomic_rate = qion + ac
+        if atomic_rate > z
+            HIequilibrium = clamp(neutral_source / atomic_rate, z, Hatomic)
+            relaxed_fraction = -expm1(-min(atomic_rate*dt, R(80)))
+            HIp = muladd(relaxed_fraction, HIequilibrium - HIatomic, HIatomic)
+        else
+            HIp = HIatomic + neutral_source*dt
+        end
+        HIp = clamp(HIp, z, Hatomic)
+        HIIp = Hatomic - HIp
+    else
+        HIIp = (yHII + (qion*Hatomic + sc_other)*dt) / atomic_denominator
+        HIIp = clamp(HIIp, z, Hatomic)
+        HIp = Hatomic - HIIp
+    end
 
     # 3) e⁻ provisional — used ONLY for downstream consistency
     sc = k8*yHM*yHI + k15*yHM*yHI + k17*yHM*yHII + k57*yHI*yHI + k58*yHI*yHeI/four +
@@ -266,8 +296,13 @@ transcription for standalone callers.
     Hrem  -= HM_n
     H2II_n = clamp(H2IIp, z, Hrem)
     Hatomic_n = Hrem - H2II_n
-    HII_n = clamp(HIIp, z, Hatomic_n)
-    HI_n  = Hatomic_n - HII_n
+    if NH
+        HI_n = clamp(HIp, z, Hatomic_n)
+        HII_n = Hatomic_n - HI_n
+    else
+        HII_n = clamp(HIIp, z, Hatomic_n)
+        HI_n = Hatomic_n - HII_n
+    end
     # nₑ from charge conservation, using the new conservative H state and the
     # algebraic intermediaries returned by this same step.
     de_n = max(HII_n + yHeII/four + yHeIII/two - HM_n + H2II_n/two, z)

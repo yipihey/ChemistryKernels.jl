@@ -57,6 +57,24 @@ end
     @test isapprox(tabulated[2], probabilities[2]; rtol=2e-5)
 end
 
+@testset "stable hydrogen Saha complement" begin
+    for z in (2450.0, 3200.0, 1.0e4, 1.0e6)
+        temperature = 2.725 * (1 + z)
+        density = n_H_at_z(z)
+        xhi64 = hydrogen_saha_neutral_fraction(temperature, density)
+        xhi32 = hydrogen_saha_neutral_fraction(Float32(temperature), Float32(density))
+        @test 0 < xhi64 <= 1
+        @test 0 < xhi32 <= 1
+        @test isapprox(Float64(xhi32), xhi64; rtol=3e-5)
+        ratio = (ChemistryKernels._REC_CR * temperature)^1.5 * 1e-6 *
+                exp(-ChemistryKernels._CHI_H_K / temperature) / density
+        # Evaluate the Saha identity without subtracting the sub-ULP neutral
+        # fraction from unity.  This is the same cancellation the production
+        # complement representation is intended to avoid.
+        @test isapprox(inv(xhi64) - 2 + xhi64, ratio; rtol=5e-12)
+    end
+end
+
 @testset "homogeneous_hyrec" begin
     # Part A: solve_chem_mixing!(FA_ZERO) must be bit-identical to solve_chem!
     n    = 8
@@ -322,6 +340,74 @@ end
     @test diag.electron_limited_steps == 0
     @test all(isfinite, (diag.e, diag.HII_m, diag.H2I_m))
     @test (diag.e, diag.HII_m, diag.H2I_m, diag.HDI_m, diag.HeII_m) == reference
+end
+
+@testset "neutral complement preserves sub-ULP high-ionization structure" begin
+    fh = 0.76f0
+    z = 2450.0f0
+    nH = Float32(n_H_at_z(Float64(z)))
+    rho = nH * Float32(ChemistryKernels.MH) / fh
+    hydrogen_mass = fh * rho
+    hi1 = 1.0f-9 * hydrogen_mass
+    hi2 = 1.5f-9 * hydrogen_mass
+    # The corresponding ionized states are identical in Float32.
+    @test hydrogen_mass - hi1 == hydrogen_mass - hi2
+
+    e = Float32(e_from_T(2.725 * (1 + Float64(z)), 1.0, Float64(rho)))
+    kwargs = (
+        f_alpha=1.0f0, Xe_mean=1.0f0,
+        smoothed_is_neutral=Val(true),
+        neutral_hydrogen_storage=Val(true),
+        hubble_expansion=true, dtfrac=1.0f0, itcap=16,
+    )
+    out1 = evolve_cell_mixing(
+        rho, e, hi1, 0.0f0, 0.0f0, nH * 1.0f-9, 0.0f0, z; kwargs...)
+    out2 = evolve_cell_mixing(
+        rho, e, hi2, 0.0f0, 0.0f0, nH * 1.5f-9, 0.0f0, z; kwargs...)
+
+    @test out1[2] > 0
+    @test out2[2] > out1[2]
+    @test out1[2] == hi1
+    @test out2[2] == hi2
+    @test all(isfinite, out1)
+    @test all(isfinite, out2)
+end
+
+@testset "neutral complement survives a stiff finite recombination step" begin
+    R = Float32
+    z = R(2500)
+    fh = R(0.7546)
+    h = R(0.674)
+    omega_b = R(0.05366655)
+    h0 = R(100) * h * R(1.0e5) / R(3.0856775807e24)
+    rho = R(3) * h0^2 / (R(8) * R(pi) * R(6.6743e-8)) *
+          omega_b * (one(R) + z)^3
+    nH = fh * rho / R(ChemistryKernels.MH)
+    temperature = R(2.725) * (one(R) + z)
+    particles_per_mass_h = R(2) * fh + (one(R) - fh) / R(4)
+    energy = particles_per_mass_h * R(ChemistryKernels.KBOLTZ) * temperature /
+             (R(ChemistryKernels.MH) * (R(5) / R(3) - one(R)))
+    hydrogen_mass = fh * rho
+    initial_hi = R(1.0e-9) * hydrogen_mass
+    heii_mass = R(0.22) * rho
+
+    function advance(dt)
+        evolve_cell_mixing(
+            rho, energy, initial_hi, zero(R), zero(R), nH, R(dt), z;
+            f_alpha=zero(R), Xe_mean=one(R), helium=true,
+            HeII_m=heii_mass, hubble_expansion=true, dtfrac=one(R),
+            itcap=1024, fh=fh, neutral_hydrogen_storage=Val(true))
+    end
+    short = advance(1.0e8)
+    long = advance(1.0e10)
+    xhi_short = short[2] / hydrogen_mass
+    xhi_long = long[2] / hydrogen_mass
+    @test xhi_short > 0
+    @test xhi_long > 0
+    @test isapprox(xhi_short, xhi_long; rtol=0.01)
+    @test hydrogen_mass - short[2] == hydrogen_mass
+    @test all(isfinite, short)
+    @test all(isfinite, long)
 end
 
 @testset "Float32 high-z Riccati equilibrium" begin

@@ -11,7 +11,7 @@
 # escape K = λ³/(8πH)).  Pure & allocation-free.
 
 export hubble_z_of, recfast_alpha, peebles_k2, beta1s_freq, helium_saha_pair
-export total_electron_fraction, helium_HeI_rate_AB
+export total_electron_fraction, helium_HeI_rate_AB, hydrogen_saha_neutral_fraction
 
 # RECFAST constants; rec_fu = 1 (pure Peebles).
 const _REC_CR  = 1.799920e14
@@ -122,6 +122,30 @@ Pure; allocation-free.
     s1 = R(4.0) * nQ * exp(-R(_CHI_HEI)  / T)                # [cm⁻³]
     s2 =          nQ * exp(-R(_CHI_HEII) / T)                # [cm⁻³]
     return s1, s2
+end
+
+"""
+    hydrogen_saha_neutral_fraction(T, nH) -> x_HI
+
+Hydrogen neutral fraction in Saha equilibrium at radiation temperature `T` [K]
+and hydrogen number density `nH` [cm^-3]. The small complementary root is
+evaluated directly, so a highly ionized Float32 state does not lose `x_HI` to
+the subtraction `1-x_HII`.
+"""
+@inline function hydrogen_saha_neutral_fraction(T::Real, nH::Real)
+    R = typeof(T)
+    nQ = (R(_REC_CR) * T)^R(1.5) * R(1.0e-6)
+    ratio = nQ * exp(-R(_CHI_H_K) / T) / max(R(nH), R(1.0e-30))
+    # (1-x_HI)^2/x_HI=ratio. Scale the small-root formula by 1/ratio in
+    # the ionized regime. This avoids both the catastrophic subtraction in
+    # the quadratic formula and overflow from forming ratio^2 or 2ratio.
+    if ratio >= one(R)
+        inverse_ratio = inv(ratio)
+        return R(2) * inverse_ratio /
+               (one(R) + R(2) * inverse_ratio +
+                sqrt(one(R) + R(4) * inverse_ratio))
+    end
+    return R(2) / (ratio + R(2) + sqrt(ratio) * sqrt(ratio + R(4)))
 end
 
 """
