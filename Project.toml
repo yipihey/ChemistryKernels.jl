@@ -1,7 +1,7 @@
 name = "ChemistryKernels"
 uuid = "1a2b3c4d-0009-4000-8000-000000000009"
 authors = ["T. Abel and contributors"]
-version = "0.1.0"
+version = "0.2.0"
 
 # Table-free, device-agnostic reimplementation of the v2026 reduced primordial+D
 # chemistry/cooling network (the model in lib/MultiCode/deps/grackle_reduced.c).
@@ -24,7 +24,7 @@ ChemistryKernelsCUDAExt = "CUDA"
 
 [compat]
 Adapt = "3, 4"
-EmissionKernels = "0.1"
+EmissionKernels = "0.1.2"
 KernelAbstractions = "0.9"
 Metal = "1"
 CUDA = "5"
