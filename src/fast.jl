@@ -82,7 +82,12 @@ end
 # H₂ formation/dissociation chemical heating (erg cm⁻³ s⁻¹; >0 heats).  Binding
 # energy is released when H₂ forms (→ gas) and absorbed when it dissociates.
 # Per-channel energies (Palla, Salpeter & Stahler 1983 / Omukai 2000): 3-body
-# 4.48 eV, H⁻ 3.53 eV, H₂⁺ 1.83 eV; collisional dissociation absorbs 4.48 eV.
+# 4.48 eV, H⁻ 3.53 eV, H₂⁺ 1.83 eV; collisional dissociation (H, e impact) absorbs
+# 4.48 eV.  The charge transfer H₂ + H⁺ → H₂⁺ + H (k11) is the REVERSE of the H₂⁺
+# formation channel (k10) and absorbs 1.83 eV, not 4.48: with 4.48 the k10/k11 null
+# cycle drained 2.65 eV per turn, a 10 %-per-3-s energy sink in hot dense gas
+# (n ≥ 1e16, T ≥ 4000 K) where the cycle runs at ~1e17 cm⁻³ s⁻¹.  Negligible in
+# cosmological gas (k11·n_HII ≪ other channels).
 # Formation heating is SUPPRESSED below the H₂ critical density (the vibrationally-
 # excited nascent H₂ radiates the energy before collisions thermalise it — the same
 # n/(n+n_cr) that saturates the H₂ cooling to LTE); dissociation cooling is always
@@ -93,10 +98,11 @@ const _ERG_PER_EV = 1.602176634e-12
     fform = k8  * nHM   * nHI                       # H⁻ channel   (3.53 eV)
     gform = k10 * nH2II * nHI                       # H₂⁺ channel  (1.83 eV)
     tform = k22 * nHI * nHI * nHI                   # 3-body       (4.48 eV)
-    diss  = (k13*nHI + k11*nHII + k12*nde) * nH2    # dissociation (4.48 eV absorbed)
+    diss  = (k13*nHI + k12*nde) * nH2               # dissociation (4.48 eV absorbed)
+    xfer  = k11 * nHII * nH2                        # charge transfer (1.83 eV absorbed)
     fcr   = nH / (nH + R(1.0e8))                    # critical-density heating efficiency
     return R(_ERG_PER_EV) *
-           (fcr*(R(3.53)*fform + R(1.83)*gform + R(4.48)*tform) - R(4.48)*diss)
+           (fcr*(R(3.53)*fform + R(1.83)*gform + R(4.48)*tform) - R(4.48)*diss - R(1.83)*xfer)
 end
 
 """

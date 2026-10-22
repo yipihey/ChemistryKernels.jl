@@ -185,3 +185,34 @@ Covered: H/He collisional excitation & ionization, recombination, bremsstrahlung
 FG20 UVB photo-ionization/heating, HyRec-accurate recombination (+ optional Lyα mixing).
 **Not** (yet): full tabulated metal cooling above 10⁴ K (the fine-structure channel tapers
 out there), radiative-transfer heating, and general non-equilibrium He/H⁻ advection.
+
+## High-density / high-temperature continuation (`dense.jl`, opt-in)
+
+For protostellar-collapse hosts (n ≳ 1e8 cm⁻³, T ≳ 2000 K) the default network's
+H₂ ⇌ 2H fixed point is not the partition-function equilibrium (the AAZN97 k13 is the
+low-density rate, zero below 3480 K, and not the detailed-balance partner of k22), H⁺ has
+no three-body recombination, and the sub-cycler hits its cap.  `dense.jl` adds, behind
+switches that leave the default path untouched:
+
+```julia
+# per cell
+evolve_cell(rho, e, HII_m, H2I_m, 0.0, dt, z; fh,
+            dense = Val(true),              # detailed-balance k13(T, n) → k22·K_H2, k1r = k1/K_ion,
+                                            # energy-conserving Saha closure for stiff cells
+            planck_radiation = Val(true),   # optically thick, J_ν = B_ν(T): photoionisation balances
+                                            # recombination, every H₂ channel is a null cycle
+            radiative_cooling = Val(false)) # host does the transfer: chemical heating only
+# arrays (primordial kernels only; CPU f64/f32, Metal/CUDA f32)
+solve_chem!(rho, e, HII, H2I; …, dense = true, planck_radiation = true, radiative_cooling = false)
+# helium atomic cooling (He I/II excitation, collisional ionisation, recombination, He brems),
+# any mode; the He stages come from the network's ionisation equilibrium
+solve_chem!(rho, e, HII, H2I; …, helium_cooling = true)
+```
+
+Hand-off: `temperature_from_reduced(…; dense = true)` returns the temperature the dense
+path used internally (exact inversion of the H₂ rotation/vibration term; the default
+one-pass evaluation differs by up to ~1 % in molecular gas at 2000–6000 K).  Non-ideal
+effects (pressure ionisation, SCVH95) are outside this package: the host switches to its
+own equation of state where p ≳ 1e4–1e6 dyn cm⁻².  Float32 is limited to n_HI ≲ 1.8e19
+cm⁻³ (yHI² in the pinned network overflows above that).  Items still to verify against
+their sources are listed at the top of `src/dense.jl`.

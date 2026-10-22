@@ -70,15 +70,21 @@ network. Pure.
 end
 
 """
-    temperature_from_reduced(rho, eint, HIImass, H2Imass; fh, gamma)
+    temperature_from_reduced(rho, eint, HIImass, H2Imass; fh, gamma, dense = false)
 
 Temperature for the v2026 reduced network straight from the advected fields
 (physical CGS): reconstruct HI = fh·ρ − HII − H2I, helium all neutral, nₑ = n_HII,
 H⁻/H2⁺ = zero — the reduced-network reconstruction — then
 `gas_temperature`. Deuterium is ignored (the temperature relation ignores D). Pure.
+
+`dense = true` uses the exact inversion of the H₂ rotation/vibration term
+(`_temperature_dense`, dense.jl) that the `dense = Val(true)` solver path uses internally;
+`gas_temperature`'s one-pass evaluation differs from it by up to ~1 % in molecular gas at
+2000–6000 K, which a host comparing with Saha compositions must not mistake for a
+chemistry error (d ln K_H₂/d ln T ≈ 20 there).
 """
 @inline function temperature_from_reduced(rho, eint, HIImass, H2Imass;
-                                          fh = FH_DEFAULT, gamma = GAMMA_DEFAULT)
+                                          fh = FH_DEFAULT, gamma = GAMMA_DEFAULT, dense::Bool = false)
     R    = typeof(eint)
     mh   = R(MH)
     z = zero(R)
@@ -86,6 +92,7 @@ H⁻/H2⁺ = zero — the reduced-network reconstruction — then
     nH2  = H2Imass / (R(2) * mh)                   # H2I is the H2 MASS density
     nHI  = max((R(fh) * rho - HIImass - H2Imass) / mh, z)
     nHeI = (one(R) - R(fh)) * rho / (R(4) * mh)
+    dense && return _temperature_dense(rho, eint, nHeI + nHI + nHII + nHII, nH2)
     return gas_temperature(rho, eint, nHI, nHII, nHeI, z, z, nHII,
                            z, nH2, z; gamma = gamma)
 end

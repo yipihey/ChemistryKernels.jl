@@ -50,7 +50,7 @@ end
 # removes optional dust/metal branches from the overwhelmingly common case.
 @kernel function _evolve_k_primordial!(e, HII, H2I, HDI, @Const(rho),
                                        du, vu2, tu, dt, z, hubble, Om, OL, fh,
-                                       deut, hexp, aoa, rtab, ctab, dtfrac, itcap)
+                                       deut, hexp, aoa, rtab, ctab, dtfrac, itcap, dn, pr, rc, hc)
     i = @index(Global)
     @inbounds begin
         T = eltype(e)
@@ -61,7 +61,7 @@ end
                                           fh=fh, deuterium=deut,
                                           hubble_expansion=hexp, adot_over_a=aoa,
                                           rate_tables=rtab, cool_tables=ctab,
-                                          dtfrac=dtfrac, itcap=itcap)
+                                          dtfrac=dtfrac, itcap=itcap, dense=dn, planck_radiation=pr, radiative_cooling=rc, helium_cooling=hc)
         e[i]   = en  / vu2
         HII[i] = hii / du
         H2I[i] = h2  / du
@@ -74,7 +74,7 @@ end
 # retaining both sides of a runtime Boolean branch.
 @kernel function _evolve_k_reduced!(e, HII, H2I, @Const(rho),
                                     du, vu2, tu, dt, z, hubble, Om, OL, fh,
-                                    hexp, aoa, rtab, ctab, dtfrac, itcap)
+                                    hexp, aoa, rtab, ctab, dtfrac, itcap, dn, pr, rc, hc)
     i = @index(Global)
     @inbounds begin
         en, hii, h2, _, _ = evolve_cell(rho[i] * du, e[i] * vu2,
@@ -83,7 +83,7 @@ end
                                          fh=fh, deuterium=false,
                                          hubble_expansion=hexp, adot_over_a=aoa,
                                          rate_tables=rtab, cool_tables=ctab,
-                                         dtfrac=dtfrac, itcap=itcap)
+                                         dtfrac=dtfrac, itcap=itcap, dense=dn, planck_radiation=pr, radiative_cooling=rc, helium_cooling=hc)
         e[i]   = en  / vu2
         HII[i] = hii / du
         H2I[i] = h2  / du
@@ -116,6 +116,19 @@ network's mass-equivalent convention) in the host code units defined by
 - `workgroup_size` : GPU threads per workgroup (0 = let KernelAbstractions choose the
                     backend default, typically 256).  Try 128 or 512 on A6000/H100 when
                     register pressure or occupancy is the bottleneck.
+- `dense`         : `true` enables the high-density/high-temperature continuation of
+                    `dense.jl` (detailed-balance H₂ ⇌ 2H and H ⇌ H⁺ + e, energy-conserving
+                    Saha closure for stiff cells).  Primordial kernels only (no metals/dust).
+                    Default `false` is bit-identical to the previous behaviour.
+- `planck_radiation` : with `dense`, treat every cell as optically thick with J_ν = B_ν(T)
+                    (photoionisation balances recombination; Saha ionisation).  Every radiative
+                    emission is then balanced by absorption, so the radiative sum is dropped
+                    (as `radiative_cooling = false`); the host's transfer carries the energy.
+- `radiative_cooling` : `false` drops the radiative cooling/heating terms (chemical heating
+                    stays) for hosts that do their own radiative transfer.  Primordial kernels only.
+- `helium_cooling` : adds the helium atomic cooling (He I/II excitation and collisional
+                    ionisation, He II/III recombination, He bremsstrahlung) with the He stages from
+                    the network's ionisation equilibrium.  Off by default (reduced-network parity).
 
 On Metal, omitted rate/cooling tables are built once, cached on the device, and reused
 automatically. CPU calls remain analytic by default. Supplying either table explicitly
@@ -147,10 +160,13 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
                      dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
                      dust::Bool = false,
                      Z_rel = nothing, G0 = nothing, A_V = nothing,
-                     N_H = nothing, N_H2 = nothing,
+                     N_H = nothing, N_H2 = nothing, dense::Bool = false, planck_radiation::Bool = false,
+                     radiative_cooling::Bool = true, helium_cooling::Bool = false,
                      backend::Symbol = :cpu, precision::Type = Float64)
     n  = length(rho)
     @assert length(e_int) == n && length(HII) == n && length(H2I) == n
+    dn = Val(dense); pr = Val(planck_radiation); rc = Val(radiative_cooling); hc = Val(helium_cooling)
+    dense && @assert !(metals !== nothing || dust) "dense=true is implemented for the primordial kernels only"
     deut = deuterium && HDI !== nothing
     deut && @assert length(HDI) == n
 
@@ -206,13 +222,13 @@ function solve_chem!(rho::AbstractVector, e_int::AbstractVector,
         k!(d_e, d_HII, d_H2I, d_rho, du, vu2, tu,
            P(dt), z, P(hubble), P(Om), P(OL), P(fh),
            hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
-           P(dtfrac), itcap; ndrange = n)
+           P(dtfrac), itcap, dn, pr, rc, hc; ndrange = n)
     elseif !hasmetals && !hasdust
         k! = workgroup_size > 0 ? _evolve_k_primordial!(be, workgroup_size) : _evolve_k_primordial!(be)
         k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
            P(dt), z, P(hubble), P(Om), P(OL), P(fh), deut,
            hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
-           P(dtfrac), itcap; ndrange = n)
+           P(dtfrac), itcap, dn, pr, rc, hc; ndrange = n)
     else
         k! = workgroup_size > 0 ? _evolve_k!(be, workgroup_size) : _evolve_k!(be)
         k!(d_e, d_HII, d_H2I, d_HDI, d_rho, du, vu2, tu,
@@ -247,9 +263,12 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
                             hubble_expansion::Bool = false, adot_over_a::Real = NaN,
                             rate_tables = nothing, cool_tables = nothing,
                             dtfrac::Real = 0.1, itcap::Int = _SUB_ITMAX, workgroup_size::Int = 0,
+                            dense::Bool = false, planck_radiation::Bool = false, radiative_cooling::Bool = true,
+                            helium_cooling::Bool = false,
                             backend::Symbol = :cuda, precision::Type = Float64)
     n  = length(rho)
     P  = precision
+    dn = Val(dense); pr = Val(planck_radiation); rc = Val(radiative_cooling); hc = Val(helium_cooling)
     be = ChemistryKernels.backend(backend)
     rate_tables, cool_tables = _resolve_tables(backend, P, rate_tables, cool_tables)
     du  = P(density_units); vu2 = P((length_units / time_units)^2)
@@ -261,13 +280,13 @@ function solve_chem_device!(rho, e_int, HII, H2I, HDI = nothing;
         k!(e_int, HII, H2I, d_HDI, rho, du, vu2, tu,
            P(dt), z, P(hubble), P(Om), P(OL), P(fh), true,
            hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
-           P(dtfrac), itcap; ndrange = n)
+           P(dtfrac), itcap, dn, pr, rc, hc; ndrange = n)
     else
         k! = workgroup_size > 0 ? _evolve_k_reduced!(be, workgroup_size) : _evolve_k_reduced!(be)
         k!(e_int, HII, H2I, rho, du, vu2, tu,
            P(dt), z, P(hubble), P(Om), P(OL), P(fh),
            hubble_expansion, P(adot_over_a), rate_tables, cool_tables,
-           P(dtfrac), itcap; ndrange = n)
+           P(dtfrac), itcap, dn, pr, rc, hc; ndrange = n)
     end
     KA.synchronize(be)
     return nothing

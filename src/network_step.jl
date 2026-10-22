@@ -153,6 +153,9 @@ transcription for standalone callers.
     kHeH_H=get(K, :kHeH_H, z)
     kHeH_e=get(K, :kHeH_e, z)
     gamma_HeH=get(K, :gamma_HeH, z)
+    # dense.jl: three-body recombination H⁺ + 2e → H + e (detailed-balance inverse of k1);
+    # absent from the default rate bundle (0 ⇒ the terms below add exactly 0.0).
+    k1r=get(K, :k1r, z)
 
     # ── (C) HI / HII / e⁻ / H2 with molecular terms ──────────────────────────
     # H⁻ and H₂⁺ are fast algebraic-equilibrium intermediaries. We evaluate them
@@ -201,7 +204,7 @@ transcription for standalone callers.
     qion = k1*yde + k57*yHI + k58*yHeI/four + k_beta1s + R(GamHI)
     sc_other = k10*H2IIeq*yHI/two + k28*nH2II
     ac_grr = dust_rates !== nothing ? dust_rates.k_grr * yde : zero(R)
-    ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM + ac_grr
+    ac = k2*yde + k9*yHI + k11*yH2I/two + k16*yHM + k17*yHM + ac_grr + k1r*yde*yde
     atomic_denominator = one(R) + (qion + ac)*dt
     if NH
         # Advance the small neutral complement directly. Forming HII first and
@@ -215,7 +218,7 @@ transcription for standalone callers.
         # their reversible part analytically, leaving only positive residual
         # destruction channels. This is algebraically equivalent to
         # ac*Hatomic-sc_other when the old state conserves H nuclei.
-        atomic_recombination = k2*yde + k16*HMp + ac_grr
+        atomic_recombination = k2*yde + k16*HMp + ac_grr + k1r*yde*yde
         h2ii_association = k9*yHI + k11*yH2I/two + k17*HMp
         h2ii_nonreturn = (k18*yde + k19*HMp)*nH2II
         neutral_source = atomic_recombination*Hatomic +
@@ -240,7 +243,7 @@ transcription for standalone callers.
     sc = k8*yHM*yHI + k15*yHM*yHI + k17*yHM*yHII + k57*yHI*yHI + k58*yHI*yHeI/four +
          k_beta1s*yHI
     ac = -(k1*yHI - k2*yHII + k3*yHeI/four - k6*yHeIII/four +
-           k5*yHeII/four - k4*yHeII/four + k14*yHM - k7*yHI - k18*H2IIeq/two)
+           k5*yHeII/four - k4*yHeII/four + k14*yHM - k7*yHI - k18*H2IIeq/two) + k1r*yde*yHII
     dep = (sc*dt + yde) / (one(R) + ac*dt)
 
     # 7) H2  (formation via H₂⁺, H⁻ channels and dust surface reactions;

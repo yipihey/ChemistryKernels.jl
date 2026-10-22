@@ -69,6 +69,7 @@ using EmissionKernels: ceHI, ceHeI, ceHeII, ciHI, ciHeI, ciHeII, ciHeIS,
       GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow,
       comp1_cmb, comp2_cmb,
       MetalAbundances, metal_abund, metal_cooling_rate, cooling_rate_total, cooling_rate_total_tab,
+      cooling_rate_helium, helium_channels, brem_Z,
       Gamma_PE, Lambda_gr, Lambda_dust
 
 export backend, has_backend, device_zeros, to_device, to_host
@@ -77,7 +78,7 @@ export ceHI, ceHeI, ceHeII, ciHI, ciHeI, ciHeII, ciHeIS,
        reHII, reHeII1, reHeII2, reHeIII, brem,
        GAHI, GAH2, GAHe, GAHp, GAel, H2LTE, HDlte, HDlow, comp1_cmb, comp2_cmb,
        MetalAbundances, metal_abund, metal_cooling_rate,
-       Gamma_PE, Lambda_gr, Lambda_dust
+       Gamma_PE, Lambda_gr, Lambda_dust, cooling_rate_helium, helium_channels, brem_Z
 
 # ── backend registry ─────────────────────────────────────────────────────────
 const _BACKENDS = Dict{Symbol,Any}(:cpu => CPU())
@@ -161,6 +162,9 @@ include("equilibrium.jl")
 # Wave 3 — assemblers: cooling rate + one backward-Euler network sweep.
 include("edot.jl")
 include("network_step.jl")
+# High-density / high-temperature continuation (detailed-balance pairs, energy-conserving
+# Saha closure); opt-in via `dense = Val(true)` in evolve_cell / `dense = true` in solve_chem!.
+include("dense.jl")
 # Wave 4 — driver: Peebles recombination, the sub-cycle, and the host boundary.
 include("recombination.jl")
 include("rate_tables.jl")     # optional log–log rate lookup (uses recombination + rates_*)

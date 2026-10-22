@@ -22,18 +22,28 @@ network at gas temperature `T` [K] and redshift `z`. Number densities are physic
 Dust contributions to the GAS energy budget (both volumetric [erg/cm³/s]):
 - `Gamma_PE_vol` — photoelectric heating (positive, heats gas)
 - `Lambda_gr_vol` — gas-grain collisional coupling (positive = gas cools when T_gas > T_dust)
+- `nHeII`, `nHeIII` — He⁺ and He²⁺ ION number densities [cm⁻³]; when given, the helium
+  atomic cooling (`EmissionKernels.cooling_rate_helium`) is added and `nHeI` must then be
+  the NEUTRAL He density (the default path passes the total He there and omits He cooling)
 """
 @inline function cooling_edot(nHI, nHII, nHeI, nde, nH2, nHD, T, z;
                               ih2optical::Bool = false, nH = nothing, metals = nothing,
                               cool_tables = nothing,
                               Gamma_PE_vol = zero(typeof(T)),
-                              Lambda_gr_vol = zero(typeof(T)))
+                              Lambda_gr_vol = zero(typeof(T)),
+                              nHeII = nothing, nHeIII = nothing)
     # analytic fits (default/reference) or the opt-in log–log cooling table.
     gas_cool = cool_tables === nothing ?
         cooling_rate_total(nHI, nHII, nHeI, nde, nH2, nHD, T, z;
                            ih2optical = ih2optical, nH = nH, metals = metals) :
         cooling_rate_total_tab(cool_tables, nHI, nHII, nHeI, nde, nH2, nHD, T, z;
                                ih2optical = ih2optical, nH = nH, metals = metals)
+    # Helium atomic cooling (excitation, collisional ionisation, recombination, He
+    # bremsstrahlung) when the He ion densities are supplied; omitted otherwise (the
+    # reduced-network default, bit-identical).  Always analytic (not in the tables).
+    if nHeII !== nothing
+        gas_cool += cooling_rate_helium(nHeI, nHeII, nHeIII, nde, T)
+    end
     # Net rate: gas cooling (negative sign) + PE heating − gas-grain coupling.
     # Lambda_gr_vol > 0 when T_gas > T_dust (gas loses energy), < 0 when gas gains.
     return -(gas_cool + Lambda_gr_vol) + Gamma_PE_vol

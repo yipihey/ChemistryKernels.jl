@@ -119,12 +119,13 @@ end
             R(2)*K.k13*yHI*yH2I/R(2) + K.k11*yHII*yH2I/R(2) +
             R(2)*K.k12*yde*yH2I/R(2) + K.k14*yHM*yde + K.k15*yHM*yHI +
             R(2)*K.k16*yHM*yHII + R(2)*K.k18*yH2II*yde/R(2) + K.k19*yH2II*yHM/R(2) -
-            K.k57*yHI*yHI - K.k58*yHI*yHeI/R(4) - K.k_beta1s*yHI - R(GamHI)*yHI
+            K.k57*yHI*yHI - K.k58*yHI*yHeI/R(4) - K.k_beta1s*yHI - R(GamHI)*yHI +
+            get(K, :k1r, zero(R))*yde*yde*yHII
     dedot = K.k1*yHI*yde + K.k3*yHeI*yde/R(4) + K.k5*yHeII*yde/R(4) +
             K.k8*yHM*yHI + K.k15*yHM*yHI + K.k17*yHM*yHII + K.k14*yHM*yde -
             K.k2*yHII*yde - K.k4*yHeII*yde/R(4) - K.k6*yHeIII*yde/R(4) -
             K.k7*yHI*yde - K.k18*yH2II*yde/R(2) + K.k57*yHI*yHI + K.k58*yHI*yHeI/R(4) +
-            K.k_beta1s*yHI + R(GamHI)*yHI
+            K.k_beta1s*yHI + R(GamHI)*yHI - get(K, :k1r, zero(R))*yde*yde*yHII
     return dedot, HIdot
 end
 
@@ -173,10 +174,14 @@ Dust physics is enabled by `dust = true`, which requires:
                              h2_fraction_floor::Real = 1.0e-12,
                              stiff_h2_pair::Val{SP} = Val(true),
                              diagnostics::Val{D} = Val(false),
+                             dense::Val{DN} = Val(false),
+                             planck_radiation::Val{PR} = Val(false),
+                             radiative_cooling::Val{RC} = Val(true),
+                             helium_cooling::Val{HC} = Val(false),
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
                              A_V::Real = 0.0, N_H::Real = 0.0,
-                             N_H2::Real = 0.0) where {SL,SP,D}
+                             N_H2::Real = 0.0) where {SL,SP,D,DN,PR,RC,HC}
     R    = typeof(e)
     mh   = R(MH); tiny = R(_SUB_TINY)
     # domain guard (match evolve_cell_analytic/fast): f16/f32 hydro + dual-energy
@@ -242,6 +247,7 @@ Dust physics is enabled by `dust = true`, which requires:
     end
 
     f    = R(dtfrac)                       # fraction-change tolerance (default 0.1 = 10%)
+    nHeII_last = zero(R); nHeIII_last = zero(R)   # dense+planck: carried He stages (energy budget)
     ttot = zero(R)
     iter = 0
     electron_shorter_steps = 0
@@ -267,12 +273,47 @@ Dust physics is enabled by `dust = true`, which requires:
         end
 
         # temperature from the current state (number densities; nH2=yH2I/2 etc.)
-        T = gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde,
-                            yHM, yH2I/R(2), yH2II/R(2); gamma = GAMMA_DEFAULT)
+        T = DN ? _temperature_dense(rho, e, yHeI/R(4) + tiny + tiny + yHI + yHII + yHM + yde,
+                                    yH2I/R(2) + yH2II/R(2)) :
+                 gas_temperature(rho, e, yHI, yHII, yHeI/R(4), tiny, tiny, yde,
+                                 yHM, yH2I/R(2), yH2II/R(2); gamma = GAMMA_DEFAULT)
         Trad = Tc
         # rate coefficients: analytic fits (default/reference) or the opt-in log–log table.
-        K  = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
+        K0 = rate_tables === nothing ? _build_rates_cr(T, yHI, Hz, cr; deuterium = deuterium) :
                                        table_rates(rate_tables, T, yHI, Hz, cr; deuterium = deuterium)
+        # dense.jl: density-dependent k13 whose LTE limit is the detailed-balance partner of
+        # k22, and the three-body recombination k1r (inverse of k1).  DN is a compile-time
+        # Val, so K has ONE concrete NamedTuple type either way (re-assigning K to a wider
+        # type inside the loop would make every K.* access dynamic: 15× slower, no GPU).
+        K1 = DN ? merge(K0, (; k13 = k13_dense(T, R(fh)*d, K0.k13, K0.k22), k1r = k1r_db(T, K0.k1))) : K0
+        # planck_radiation: the helium Saha factors at the GAS temperature (J = B(T)) replace
+        # the CMB ones, so the He ionisation equilibrium of network_step is Saha + collisional.
+        K = (DN && PR) ? merge(K1, (; she1 = helium_saha_pair(T)[1], she2 = helium_saha_pair(T)[2])) : K1
+        # helium stages (the same collisional-radiative equilibrium network_step uses) for the
+        # He cooling terms and, under planck_radiation, the He ionisation energy budget
+        if DN && PR
+            # He stages with n_e solved self-consistently (helium may supply its own electrons);
+            # n_e is updated so the rates/limiters and network_step see the consistent value
+            ne_h = yHII + yH2II / R(2) - yHM
+            nHeI_s, nHeII_s, nHeIII_s, yde = helium_selfconsistent(K.she1, K.she2, K.k3, K.k4, K.k5, K.k6,
+                                                                   ne_h, yHeI/R(4))
+            yde = max(yde, tiny)
+            if iter == 1
+                nHeII_last = nHeII_s; nHeIII_last = nHeIII_s
+            end
+        elseif HC
+            nHeI_s, nHeII_s, nHeIII_s = helium_equilibrium(K.she1, K.she2, K.k3, K.k4, K.k5, K.k6,
+                                                           max(yde, zero(R)), yHeI/R(4))
+        else
+            nHeI_s, nHeII_s, nHeIII_s = yHeI/R(4), zero(R), zero(R)
+        end
+        # planck_radiation (dense only): the cell is optically thick and J_ν = B_ν(T), so
+        # photoionisation of H balances radiative recombination by detailed balance,
+        # Γ_HI = k2·K_ion(T) [s⁻¹] (the Milne pair of titan.jl ChemNet with J = B): the
+        # ionisation fixed point is then Saha even where three-body recombination is
+        # still slow.  Meant together with radiative_cooling = Val(false) (the host does
+        # the transfer); the matching photoionisation heating is not added here.
+        GamHI_pl = (DN && PR) ? K.k2 * exp(clamp(lnK_ion(T), R(-80), R(80))) : zero(R)
         # H- and H2+ are algebraic intermediaries, not persistent state. Refresh them
         # from the same state/rates used by cooling, chemistry heating, and timestep
         # estimates so re-entering `evolve_cell` is equivalent to internal refinement.
@@ -303,14 +344,94 @@ Dust physics is enabled by `dust = true`, which requires:
         # cooling rate (volumetric, signed) + temstart shutoff (no cooling at
         # the temperature floor — set to exactly 0, not a spurious-sign tiny).
         nHD  = yHDI / R(3)
-        edot = cooling_edot(yHI, yHII, yHeI/R(4), yde, yH2I/R(2), nHD, T, zt;
-                            nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
-                            Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol)
+        # radiative_cooling = Val(false): an optically thick host (radiative transfer done
+        # elsewhere) keeps only the chemical heating; the Compton split below is then off.
+        nHeII_c  = HC ? nHeII_s  : nothing
+        nHeIII_c = HC ? nHeIII_s : nothing
+        nHeI_c   = HC ? nHeI_s   : yHeI/R(4)
+        # planck_radiation: with J_ν = B_ν(T) every emission process (lines, recombination,
+        # free–free, Compton with the local field) is balanced by its inverse absorption, so the
+        # radiative sum exchanges no energy with the gas — the host's transfer does.  (Earlier
+        # only the collisional-ionisation terms were taken out, leaving recombination and
+        # free–free emission unbalanced.)  RCe = the radiative terms actually applied.
+        RCe = RC && !(DN && PR)
+        edot = RCe ? cooling_edot(yHI, yHII, nHeI_c, yde, yH2I/R(2), nHD, T, zt;
+                                 nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
+                                 Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol,
+                                 nHeII = nHeII_c, nHeIII = nHeIII_c) :
+                    zero(R)
+        RCe || (c1 = zero(R))
+        # dense: how fast does the radiative rate change with e?  Lyα cooling has
+        # d ln Λ/d ln T ≈ 118348 K/T ≈ 13 at 9000 K, so a 10 % energy step changes the
+        # rate 4×; the default scheme only survives there because its H₂ pair limiter
+        # happens to force ~400 sub-steps.  One extra cooling evaluation at e·(1+δ) gives
+        # |d ln ė/d ln e|, which divides the energy limiter below.
+        cool_sens = one(R)
+        if DN && RCe && edot != zero(R)
+            δe = R(0.05)
+            e2 = e * (one(R) + δe)
+            T2 = _temperature_dense(rho, e2, yHeI/R(4) + tiny + tiny + yHI + yHII + yHM + yde,
+                                    yH2I/R(2) + yH2II/R(2))
+            edot2 = cooling_edot(yHI, yHII, nHeI_c, yde, yH2I/R(2), nHD, T2, zt;
+                                 nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
+                                 Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol,
+                                 nHeII = nHeII_c, nHeIII = nHeIII_c)
+            if edot2 != zero(R) && sign(edot2) == sign(edot)
+                cool_sens = max(one(R), abs(log(abs(edot2) / abs(edot))) / log(one(R) + δe))
+            end
+        end
         # H₂ formation heating + dissociation cooling (uses the explicitly-evolved
         # H⁻/H₂⁺; yH2II carries the 2× convention → n(H₂⁺)=yH2II/2, n(H⁻)=yHM).
-        edot += _h2_chem_heat(yHI, yHII, yde, yH2I/R(2),
-                              yHM_rate, yH2II_rate/R(2), R(fh)*d,
-                              K.k8, K.k10, K.k11, K.k12, K.k13, K.k22)
+        h2heat = _h2_chem_heat(yHI, yHII, yde, yH2I/R(2),
+                               yHM_rate, yH2II_rate/R(2), R(fh)*d,
+                               K.k8, K.k10, K.k11, K.k12, K.k13, K.k22)
+        # dense.jl: the H₂ binding energy is charged from the ACTUAL change of n_H₂ in this
+        # sub-step (after network_step, or inside the equilibrium closure), not from
+        # rate × dt: the explicit estimate and the implicit species update disagree by
+        # up to 16 % of the thermal energy per step when the pair is moderately stiff, and
+        # the k11/k10 charge-transfer cycle is then automatically energy-neutral.  What
+        # stays explicit is the part of the formation energy that is RADIATED, not
+        # thermalised (the default scheme's physics: below the H₂ critical density the
+        # nascent molecule radiates; the H⁻ and H₂⁺ routes always lose 0.95 / 2.65 eV to
+        # their association photons) — so an H⁻-formation / dissociation cycle cools the gas
+        # by 4.48 eV at low density exactly as in the default.  Under planck_radiation (LTE,
+        # thick) those photons are reabsorbed and nothing is lost.
+        # The H₂ ↔ H₂⁺ conversions are bookkeeping on top of the Δn_H₂ charge: the charge
+        # transfer k11 (H₂ + H⁺ → H₂⁺ + H) removes an H₂ (Δ charges 4.48 eV) but the gas
+        # pays only 1.83 (2.65 eV stay as H₂⁺ binding), hence the +2.65·xfer term; the k10
+        # return is covered by the gform loss term.  Under planck_radiation (LTE) every
+        # channel is a balanced cycle and no explicit term remains (association photons
+        # are reabsorbed): the Δ charge and the closure are the whole energy budget.
+        if DN
+            if !PR
+                nHp = R(fh)*d; fcr = nHp / (nHp + R(1.0e8))
+                fform = K.k8  * yHM_rate   * yHI
+                gform = K.k10 * (yH2II_rate / R(2)) * yHI
+                tform = K.k22 * yHI * yHI * yHI
+                xfer  = K.k11 * yHII * (yH2I / R(2))
+                # the HeH⁺ route (He + H⁺ → HeH⁺ + γ, HeH⁺ + H → He + H₂⁺ → H₂) and k19 are
+                # direct H₂ sources in network_step without a heating term in the default
+                # scheme (their binding energy goes to association photons / vibration):
+                # take their 4.48 eV back out of the Δ charge, keeping fcr·1.83 for the
+                # final H₂⁺ + H step of the HeH⁺ route as for gform.
+                hform = K.kHeH_H * equilibrium_HeH(yHeI/R(4), yHII, yde, yHI, K.kHeH_ra, K.kHeH_H,
+                                                   K.kHeH_e, K.gamma_HeH) * yHI
+                oform = K.k19 * (yH2II_rate / R(2)) * yHM_rate
+                edot -= R(_ERG_PER_EV) * ((R(4.48) - fcr * R(3.53)) * fform +
+                                          (R(4.48) - fcr * R(1.83)) * (gform + hform) +
+                                          (one(R) - fcr) * R(4.48) * tform +
+                                          R(4.48) * oform -
+                                          R(2.65) * xfer)
+            end
+        else
+            edot += h2heat
+        end
+        # dense without a Planck field: the 13.6 eV returned by three-body recombination
+        # (the inverse of the collisional-ionisation cooling ciHI inside cooling_edot).
+        # With planck_radiation the whole ionisation energy is charged from Δn_H⁺ below
+        # (J = B: photoionisation heating balances recombination cooling), so ciHI is
+        # taken back out of the radiative sum.
+        (DN && !PR) && (edot += R(E_H_ION) * K.k1r * yde * yde * yHII)
         if T <= R(1.01)*R(MIN_TEMPERATURE) && edot < zero(R)
             edot = zero(R)
         end
@@ -321,8 +442,13 @@ Dust physics is enabled by `dust = true`, which requires:
         end
 
         dedot, _ = _de_hi_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
-                              yHeI, tiny, tiny, K)
-        dt_electron = _step_f(yde, dedot, f)
+                              yHeI, tiny, tiny, K; GamHI = GamHI_pl)
+        # dense: the HI/HII pair is integrated implicitly (L-stable) in network_step, so the
+        # 10 %-of-current-n_e rule is an accuracy limiter only; measure the change against
+        # the larger of n_e and its Saha value, so a cell far below equilibrium is not
+        # forced into thousands of sub-steps while it ionises monotonically.
+        yde_ref = (DN && PR) ? max(yde, exp(clamp(R(0.5) * (lnK_ion(T) + log(max(yHI, tiny))), R(-80), R(80)))) : yde
+        dt_electron = _step_f(yde_ref, dedot, f)
         dt_h2 = if SL === :h2 || D
             h2dot = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                             yHeI/R(4), K;
@@ -366,8 +492,62 @@ Dust physics is enabled by `dust = true`, which requires:
         direct_h2_pair = SP &&
             _use_threebody_h2_equilibrium(yHI, yH2I, K.k22, K.k13,
                                           h2_source, h2_loss, dt_macro)
-        dt_h2_pair = SP && !direct_h2_pair ?
+        # dense + planck_radiation (LTE, optically thick): every H₂ channel is a null cycle,
+        # so the only condition for the Saha closure is that the H₂ ⇌ 2H exchange (H- and
+        # e-impact dissociation, three-body formation) resolves many relaxation times per
+        # step.  The default criterion's "other channels ≤ 1 %" clause would otherwise
+        # reject hot ionised gas because of the (closed) k11/k10 charge-transfer cycle.
+        if DN && PR
+            pair_freq_dn = R(2)*K.k22*yHI*yHI + K.k13*yHI + K.k12*yde
+            direct_h2_pair = direct_h2_pair || pair_freq_dn * dt_macro >= R(10)
+        end
+        # dense: the 0.2/ν pair limiter guards the error of freezing n_HI and T across the
+        # sweep while H₂ is a MAJOR species.  For trace H₂ (≤ 1e-3 of the pair budget) the
+        # frozen-source backward-Euler update is already the quasi-steady solution, and
+        # resolving 1/(k13 n_H) in hot gas — where the density-dependent k13 is up to 30×
+        # the low-density fit — would cost ~1e6 sub-steps per Myr for nothing.
+        trace_h2 = DN && yH2I <= R(1.0e-3) * (yHI + yH2I)
+        dt_h2_pair = SP && !direct_h2_pair && !trace_h2 ?
                      R(0.2) / max(h2_pair_frequency, tiny) : typemax(R)
+        # … but trace H₂ still gets a change limiter weighted by its share of the radiative
+        # rate: the total cooling may change by ≤ f per sub-step through the H₂ change,
+        # i.e. |Δn_H₂/n_H₂| ≤ f / share.  At n ≈ 30, 9000 K an H₂ fraction of 1e-6 already
+        # carries the cooling and grows 10× per Myr/20, which a fixed floor would miss; a
+        # cell whose H₂ is irrelevant to the energy may change it 100× per sub-step (the
+        # quasi-steady backward-Euler update is exact for a trace species).
+        if trace_h2 && !direct_h2_pair
+            h2_share = zero(R)                 # fraction of the radiative rate carried by H₂
+            if RCe && edot != zero(R)
+                edot_noH2 = cooling_edot(yHI, yHII, nHeI_c, yde, zero(R), nHD, T, zt;
+                                         nH = R(fh)*d, metals = metals, cool_tables = cool_tables,
+                                         Gamma_PE_vol = Gamma_pe_vol, Lambda_gr_vol = Lambda_gg_vol,
+                                         nHeII = nHeII_c, nHeIII = nHeIII_c)
+                h2_share = clamp((edot_noH2 - edot) / abs(edot), zero(R), one(R))
+            end
+            h2dot_tr = _h2_dot(yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate, yHeI/R(4), K;
+                               k_h2d=dust_rates.k_h2d, k_lw=dust_rates.k_lw)
+            dt_h2_pair = min(dt_h2_pair, _step_f(max(yH2I, tiny), h2dot_tr, f) / max(h2_share, R(1.0e-3)))
+        end
+        # dense.jl closure: when the H₂ pair is stiff (direct_h2_pair), H₂ is in LTE and
+        # every formation/dissociation channel is a null cycle (the one-way H⁻ route and
+        # e-impact dissociation have no inverse in this network and would otherwise act as
+        # fake heat sources of up to 1e16 erg g⁻¹ s⁻¹ at n ≥ 1e18).  The binding energy
+        # of the NET H₂ change is exchanged by the energy-conserving equilibrium solve
+        # after network_step; all explicit H₂ heating is removed here.  The ionisation
+        # pair joins when it is stiff too and Saha is its fixed point (three-body
+        # recombination dominant, or planck_radiation); then its 13.6 eV terms are
+        # removed as well and the electron limiter is released (the closure owns n_e).
+        saha_ion = false
+        if DN && direct_h2_pair
+            nu_ion = (K.k1 + K.k2) * yde + R(3) * K.k1r * yde * yde + K.k_beta1s + K.k57 * yHI + GamHI_pl
+            saha_ion = nu_ion * dt_macro >= R(10) && (PR || K.k1r * yde >= R(10) * K.k2)
+            if saha_ion
+                # three-body regime without a Planck field: its explicit 13.6 eV terms are
+                # replaced by the closure's exact accounting (with PR they are already out)
+                PR || (edot += (RCe ? ciHI(T) : zero(R)) * yHI * yde - R(E_H_ION) * K.k1r * yde * yde * yHII)
+                dt_species = typemax(R)
+            end
+        end
         dtit = min(dt_species, dt_h2_pair, dt_macro)
 
         # energy sub-step + CMB-Compton stiffness split
@@ -376,7 +556,7 @@ Dust physics is enabled by `dust = true`, which requires:
         Kc        = c1 * yde * (T / e) / rho        # specific Compton frequency
         stiff     = Kc * rem > one(R)
         de_spec   = (stiff ? edot_rest : edot) / rho
-        dt_energy = _step_f(e, de_spec, f)
+        dt_energy = _step_f(e, de_spec, f) / cool_sens
         dtit = min(dtit, dt_energy)
 
         if D
@@ -405,9 +585,63 @@ Dust physics is enabled by `dust = true`, which requires:
         s = network_step(d, fh, yHI, yHII, yde, yH2I, yHM_rate, yH2II_rate,
                          yDI, yDII, yHDI, K, dtit; deuterium = deuterium,
                          dust_rates = dust_rates, intermediates_current=Val(true),
-                         stiff_h2_pair=stiff_h2_pair)
+                         stiff_h2_pair=stiff_h2_pair, GamHI = GamHI_pl,
+                         yHeII_in = (DN && PR) ? R(4) * nHeII_s : nothing,
+                         yHeIII_in = (DN && PR) ? R(4) * nHeIII_s : nothing)
+        yH2I_pre = yH2I; yHII_pre = yHII
         yHI=s.yHI; yHII=s.yHII; yde=s.yde; yH2I=s.yH2I; yHM=s.yHM
         yH2II=s.yH2II; yDI=s.yDI; yDII=s.yDII; yHDI=s.yHDI
+        if DN
+            # binding energy from the actual species change of this sub-step: 4.48 eV per
+            # net H₂ formed (× the critical-density thermalisation efficiency, as in
+            # _h2_chem_heat) or destroyed; with a Planck field also 13.6 eV per net H⁺.
+            # The closure below redoes the H₂ (and, if saha_ion, H⁺) part exactly.
+            direct_h2_pair || (e += R(E_H2_BIND) * ((yH2I - yH2I_pre) / R(2)) / rho)
+            (PR && !saha_ion) && (e -= R(E_H_ION) * (yHII - yHII_pre) / rho)
+            e = max(e, tiny)
+        end
+        if DN && direct_h2_pair
+            # Energy-conserving placement on the Saha manifold (dense.jl): thermal +
+            # chemical energy of the pair(s) before this sub-step is conserved; the
+            # explicit update above carried everything else.
+            nHe_all = yHeI / R(4)                      # every He stage counts once as a particle
+            # planck: helium is solved inside the closure (Saha at the trial T, its electrons
+            # and ionisation energy); e_o is then the non-He, non-H⁺ electron count and the
+            # budget starts from the He energy charged so far (nHe*_last).  Otherwise helium
+            # stays frozen (its electrons in e_o / n_other) and no He energy is tracked.
+            nHeE_last = nHeII_last + R(2) * nHeIII_last
+            e_o = PR ? max(yde - yHII - nHeE_last, zero(R)) : max(yde - yHII, zero(R))
+            e_tot = e - R(E_H2_BIND) * (yH2I_pre / R(2)) / rho +
+                    (saha_ion ? R(E_H_ION) * yHII_pre / rho : zero(R)) +
+                    (PR ? (R(E_HEI_ION) * nHeII_last + (R(E_HEI_ION) + R(E_HEII_ION)) * nHeIII_last) / rho : zero(R))
+            C = yHI + yH2I + (saha_ion ? yHII : zero(R))
+            n_other = nHe_all + yHM + yH2II / R(2) + (saha_ion ? zero(R) : yHII + (PR ? yHII + e_o : yde))
+            e, yHI, yH2I, yHII_c, yde_c, T, nHeII_c, nHeIII_c =
+                dense_equilibrium(rho, e_tot, C, e_o, n_other, yH2II / R(2), T, saha_ion,
+                                  PR ? nHe_all : zero(R), K.k3, K.k4, K.k5, K.k6, yHII + e_o)
+            if saha_ion
+                yHII = yHII_c; yde = yde_c
+            elseif PR
+                yde = yHII + e_o + nHeII_c + R(2) * nHeIII_c
+            end
+            if PR
+                nHeII_last = nHeII_c; nHeIII_last = nHeIII_c; nHeII_s = nHeII_c; nHeIII_s = nHeIII_c
+            end
+        end
+
+        if DN && PR && !direct_h2_pair
+            # helium ionisation energy from the change of the (algebraic) He stages since the
+            # last charge — telescoping, so the sum over sub-steps is exact (24.59 eV per He⁺,
+            # 24.59 + 54.42 eV per He²⁺; the same constants as ciHeI/ciHeII).  When the
+            # closure fired it already charged for the stages it returned.
+            _, nHeII_p, nHeIII_p, yde = helium_selfconsistent(K.she1, K.she2, K.k3, K.k4, K.k5, K.k6,
+                                                              yHII + yH2II / R(2) - yHM, yHeI/R(4))
+            yde = max(yde, tiny)
+            e -= (R(E_HEI_ION) * (nHeII_p - nHeII_last) +
+                  (R(E_HEI_ION) + R(E_HEII_ION)) * (nHeIII_p - nHeIII_last)) / rho
+            e = max(e, tiny)
+            nHeII_last = nHeII_p; nHeIII_last = nHeIII_p
+        end
 
         ttot = _advance_subcycle_time(ttot, dtit, dt)
     end
@@ -419,7 +653,8 @@ Dust physics is enabled by `dust = true`, which requires:
                 electron_shorter_steps, h2_shorter_steps,
                 electron_selected_steps, h2_selected_steps,
                 minimum_electron_dt_fraction, minimum_h2_dt_fraction,
-                minimum_h2_over_electron)
+                minimum_h2_over_electron,
+                nHeII = nHeII_last, nHeIII = nHeIII_last)   # dense+planck: He stages of the last energy charge
     end
     return e, yHII*mh, yH2I*mh, (deuterium ? yHDI*mh : HDI_m), ttot   # ttot = consumed (≤ dt)
 end
