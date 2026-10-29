@@ -59,4 +59,6 @@ ORACLE || @info "C-grackle oracle (libchem_oracle.dylib) absent — skipping gra
     include("test_dense_equilibrium.jl")
     # ── complete atomic H + He cooling (helium_cooling switch) ──────────────────
     include("test_atomic_helium.jl")
+    # ── adaptive ROS2 integrator (drop-in for the subcycler) ──────────────────
+    include("test_ros2.jl")
 end

@@ -178,6 +178,7 @@ Dust physics is enabled by `dust = true`, which requires:
                              planck_radiation::Val{PR} = Val(false),
                              radiative_cooling::Val{RC} = Val(true),
                              helium_cooling::Val{HC} = Val(false),
+                             nsteps_out = nothing,
                              dust::Bool = false,
                              Z_rel::Real = 0.0, G0::Real = 0.0,
                              A_V::Real = 0.0, N_H::Real = 0.0,
@@ -646,6 +647,7 @@ Dust physics is enabled by `dust = true`, which requires:
         ttot = _advance_subcycle_time(ttot, dtit, dt)
     end
 
+    nsteps_out === nothing || (nsteps_out[] = iter)
     if D
         return (; e, HII_m=yHII*mh, H2I_m=yH2I*mh,
                 HDI_m=(deuterium ? yHDI*mh : HDI_m),
