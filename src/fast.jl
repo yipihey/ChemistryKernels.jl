@@ -69,7 +69,10 @@ end
     scale = max(b, s)
     disc = scale > zero(R) ?
            scale * sqrt((b/scale)^2 + (s/scale)^2) : zero(R)
-    disc <= zero(R) && return y0
+    # disc can still flush to 0 when tiny-positive loss and source both underflow
+    # (e.g. k1·n_e at T→1 K in a cold void cell): the source is then dynamically
+    # negligible and pure recombination, not a frozen y0, is the correct limit.
+    disc <= zero(R) && return y0 / (one(R) + k2*y0*dt)
     yp = c > zero(R) ? (R(2)*c) / (b + disc) : zero(R)
     ym = (-b - disc) / (R(2)*k2)
     delta = -expm1(-min(disc*dt, R(80)))

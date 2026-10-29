@@ -101,6 +101,24 @@ let CK = ChemistryKernels,
     end
 
     @testset "evolve_cell_analytic (closed-form, no BDF)" begin
+        @testset "f32 void-cell corner is finite (Riccati underflow guard)" begin
+            # Regression (BlockAMR haloA collapse, Jul 2026): a cold void cell
+            # (n_H ~ 1e-4 cm⁻³, e→0 from stored-f16 Ge underflow) with x_HII
+            # anywhere from the u16-codec floor (7.7e-34) to ~1e-12 gives a
+            # tiny-POSITIVE p = k1·n_e that slips past the pure-recomb branch
+            # while p² and 4·k₂·d BOTH underflow Float32 → Δ = 0 → degenerate
+            # Riccati roots → 0/0 = NaN.  The Δ ≤ 8ε·k₂·y₀ guard must return
+            # the pure-recomb limit instead.  (Float64 never underflows here.)
+            r32 = 0.0049362183f0 * 4.417422226276435f-26        # CGS g/cm³
+            dt  = Float32(0.01145994570106268 * 7.086582390412224e14)
+            z   = Float32(1 / 0.03934350928967368 - 1)
+            for xh in (7.7f-34, 1.0f-12, 1.0f-6), e0 in (0.0f0, 1.0f-8)
+                en, hii, h2, _, _ = CK.evolve_cell_analytic(
+                    r32, e0 * 2.584126691451084f17, xh * r32, 5.9487970f-6 * r32,
+                    dt, z; hubble = 67.4f0, Om = 0.315f0, OL = 0.685f0, fh = 0.76f0)
+                @test isfinite(en) && isfinite(hii) && isfinite(h2)
+            end
+        end
         @testset "IGM recombination freeze-out matches the full network" begin
             a=igm(anal); b=igm(full); nH=nHbar(20.0)
             @test isapprox(a.nHII/nH, b.nHII/nH; rtol=0.05)     # relic x_e freeze to 5%
